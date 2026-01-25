@@ -9,7 +9,7 @@
 		<Authors>Daniele Fusi</Authors>
 		<Company>Fusi</Company>
 		<Product>Cadmus</Product>
-		<Description>TaxoStore PostgreSQL components.</Description>
+		<Description>TaxoStore Cadmus part seeders.</Description>
 		<Copyright>by Daniele Fusi 2026</Copyright>
 		<NeutralLanguage>en-US</NeutralLanguage>
 		<PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
@@ -23,30 +23,21 @@
 		<Deterministic>true</Deterministic>
 	</PropertyGroup>
 
-	<ItemGroup>
-	  <None Remove="Assets\Schema.pgsql" />
-	</ItemGroup>
-
-	<ItemGroup>
-	  <EmbeddedResource Include="Assets\Schema.pgsql" />
-	</ItemGroup>
-
 	<PropertyGroup>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 	</PropertyGroup>
-	
-	<ItemGroup>
-		<PackageReference Include="Fusi.DbManager.PgSql" />
-		<PackageReference Include="Npgsql" />
-	</ItemGroup>
 
 	<!-- internal packages: use references for development, packages for deployment -->
 	<ItemGroup Condition="'$(Configuration)'=='Debug'">
-		<ProjectReference Include="..\TaxoStore.Core\TaxoStore.Core.csproj" />
+		<ProjectReference Include="..\Cadmus.TaxoStore.Parts\Cadmus.TaxoStore.Parts.csproj" />
 	</ItemGroup>
 
 	<ItemGroup Condition="'$(Configuration)'=='Release'">
-		<PackageReference Include="TaxoStore.Core" />
+		<PackageReference Include="Cadmus.TaxoStore.Parts" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="Cadmus.Seed" />
 	</ItemGroup>
 
 </Project>

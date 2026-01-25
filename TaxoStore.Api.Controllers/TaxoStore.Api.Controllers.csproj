@@ -9,7 +9,7 @@
 		<Authors>Daniele Fusi</Authors>
 		<Company>Fusi</Company>
 		<Product>Cadmus</Product>
-		<Description>Tree store API components.</Description>
+		<Description>TaxoStore API components.</Description>
 		<Copyright>by Daniele Fusi 2026</Copyright>
 		<NeutralLanguage>en-US</NeutralLanguage>
 		<PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>

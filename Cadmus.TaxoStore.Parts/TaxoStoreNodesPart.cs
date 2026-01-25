@@ -16,7 +16,7 @@ namespace Cadmus.TaxoStore.Parts;
 /// <para>Tag: <c>it.vedph.taxo-store-nodes</c>.</para>
 /// </summary>
 [Tag("it.vedph.taxo-store-nodes")]
-public class TaxoStoreNodesPart : PartBase
+public sealed class TaxoStoreNodesPart : PartBase
 {
     /// <summary>
     /// The identifier of the taxonomy tree used by this part. All the nodes
