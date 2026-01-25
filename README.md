@@ -17,6 +17,8 @@ The **node** is a simple structure with:
 - a set of flags where each character represents a boolean attribute.
 - an optional note.
 
+![database schema](db.png)
+
 ### Computed Position Properties
 
 For tree visualization and navigation purposes, the API can compute and return additional properties:
