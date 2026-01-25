@@ -1,0 +1,13 @@
+tree_n,parent_key,key,label,filtered_label,flags
+1,,prog,Programming,programming,
+1,prog,oop,Object-Oriented,object oriented,
+1,prog,func,Functional,functional,
+1,oop,csharp,C#,c,d
+1,oop,java,Java,java,
+1,func,haskell,Haskell,haskell,o
+2,,fruit,Fruits,fruits,
+2,fruit,citrus,Citrus,citrus,
+2,fruit,berry,Berries,berries,
+2,citrus,orange,Orange,orange,
+2,citrus,lemon,Lemon,lemon,
+2,berry,strawberry,Strawberry,strawberry,

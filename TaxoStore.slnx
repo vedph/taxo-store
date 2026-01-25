@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="buildnpub.ps1" />
+    <File Path="bumpver.ps1" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="Cadmus.TaxoStore.Parts/Cadmus.TaxoStore.Parts.csproj" Id="9407bb2c-58f5-4903-a557-1c645ce1cc9f" />
+  <Project Path="TaxoStore.Api.Controllers/TaxoStore.Api.Controllers.csproj" Id="2f821e30-2e08-43b8-87e8-dbc2f9902a75" />
+  <Project Path="TaxoStore.Api/TaxoStore.Api.csproj" Id="5521e3d5-c196-4bcc-8219-f74b4bd1affa" />
+  <Project Path="TaxoStore.Core/TaxoStore.Core.csproj" />
+  <Project Path="TaxoStore.PgSql.Test/TaxoStore.PgSql.Test.csproj" />
+  <Project Path="TaxoStore.PgSql/TaxoStore.PgSql.csproj" />
+</Solution>

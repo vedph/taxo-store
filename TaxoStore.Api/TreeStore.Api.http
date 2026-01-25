@@ -1,0 +1,13 @@
+@TaxoStore.Api_HostAddress = http://localhost:5168
+
+### Get Tree
+GET {{TaxoStore.Api_HostAddress}}/api/taxostore/trees/1
+Accept: application/json
+
+### Get Node
+GET {{TaxoStore.Api_HostAddress}}/api/taxostore/nodes/3
+Accept: application/json
+
+### Get Nodes
+GET {{TaxoStore.Api_HostAddress}}/api/taxostore/nodes?pageNumber=1&pageSize=10&filteredLabel=mammals
+Accept: application/json

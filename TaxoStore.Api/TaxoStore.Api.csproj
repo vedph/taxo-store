@@ -1,0 +1,45 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>disable</ImplicitUsings>
+	</PropertyGroup>
+
+	<ItemGroup>
+	  <None Remove="Assets\Auth.pgsql" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <EmbeddedResource Include="Assets\Auth.pgsql" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Fusi.Api.Auth.Controllers" />
+		<PackageReference Include="Fusi.Api.Auth.Models" />
+		<PackageReference Include="Fusi.DbManager.PgSql" />
+		<PackageReference Include="MessagingApi" />
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+		<PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+		<PackageReference Include="Polly" />
+		<PackageReference Include="Scalar.AspNetCore" />
+		<PackageReference Include="Serilog" />
+		<PackageReference Include="Serilog.Extensions.Hosting" />
+		<PackageReference Include="Serilog.Sinks.Console" />
+		<PackageReference Include="Serilog.Sinks.File" />
+	</ItemGroup>
+
+	<!-- internal packages: use references for development, packages for deployment -->
+	<ItemGroup Condition="'$(Configuration)'=='Debug'">
+		<ProjectReference Include="..\TaxoStore.Api.Controllers\TaxoStore.Api.Controllers.csproj" />
+		<ProjectReference Include="..\TaxoStore.Core\TaxoStore.Core.csproj" />
+		<ProjectReference Include="..\TaxoStore.PgSql\TaxoStore.PgSql.csproj" />
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(Configuration)'=='Release'">
+		<PackageReference Include="TaxoStore.Api.Controllers" />
+		<PackageReference Include="TaxoStore.Core" />
+		<PackageReference Include="TaxoStore.PgSql" />
+	</ItemGroup>
+
+</Project>
