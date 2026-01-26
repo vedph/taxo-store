@@ -36,7 +36,7 @@ So, the note data essentially consists only in its identity and the correspondin
 
 For instance, imagine a taxonomy like that of IconClass for iconographic "keywords". The taxonomy which will be used will use strings as identifiers for both trees and nodes. These will usually be meaningful IDs, like `christ.hand.right.up` for a node (where each dot here represents a step down the tree), and `iconography` for a tree; but this is up to the taxonomy we want to represent. The store is generic enough to represent any taxonomies, like e.g. product categories, where each category can have subcategories, and each category and subcategory can have a unique key and label.
 
->If you need to attach more data to nodes, you can further extend this project by adding new tables which provide more data payload attached to each node.
+> If you need to attach more data to nodes, you can further extend this project by adding new tables which provide more data payload attached to each node.
 
 The intended first application of this project is having any number of massive editable taxonomies with high performance for read operations in those [Cadmus](https://vedph.github.io/cadmus-doc)-based projects which rely on huge taxonomies, and still allow users to edit the taxonomy when required.
 
@@ -59,7 +59,7 @@ So, a node key is granted to be unique only within its tree, not globally. If yo
 
 This section explains how to integrate the TaxoStore into your ASP.NET Core Web API project. The integration follows ASP.NET best practices using the service extension pattern for clean, maintainable configuration.
 
->⚠️ It is assumed that your ASP.NET Core Web API implements authentication, as the TaxoStore controllers require authenticated access.
+> ⚠️ It is assumed that your ASP.NET Core Web API implements authentication, as the TaxoStore controllers require authenticated access.
 
 The integration relies on three main components in the `TaxoStore.Api.Controllers.Services` namespace:
 
@@ -69,13 +69,13 @@ The integration relies on three main components in the `TaxoStore.Api.Controller
 
 ### Step 1: Add Package References
 
-Add references to the required projects in your API's `.csproj` file:
+Add packages to the required projects in your API's `.csproj` file (update version numbers accordingly):
 
 ```xml
 <ItemGroup>
-  <ProjectReference Include="..\TaxoStore.Core\TaxoStore.Core.csproj" />
-  <ProjectReference Include="..\TaxoStore.PgSql\TaxoStore.PgSql.csproj" />
-  <ProjectReference Include="..\TaxoStore.Api.Controllers\TaxoStore.Api.Controllers.csproj" />
+  <PackageReference Include="TaxoStore.Api.Controllers" Version="0.0.1" />
+  <PackageReference Include="TaxoStore.Core" Version="0.0.1" />
+  <PackageReference Include="TaxoStore.PgSql" Version="0.0.1" />
 </ItemGroup>
 ```
 
@@ -193,7 +193,7 @@ Fields in `nodes.csv`:
 - `filtered_label`: searchable label (auto-generated if empty).
 - `flags`: optional flags string.
 
->To specify custom paths for seed files:
+> To specify custom paths for seed files:
 
 ```cs
 builder.Services.AddTreeServices(options =>
@@ -240,7 +240,7 @@ Once integrated, the following endpoints become available:
   - `DELETE /api/taxostore/nodes/{id}` - Delete a node by its numeric ID.
   - `DELETE /api/taxostore/nodes` - Clear all data from the store.
 
->The `includePosition` query parameter (boolean, default `false`) controls whether X (sibling position), Y (depth), and HasChildren values are computed and included in the response. Set to `true` when position data is needed for visualization; omit or set to `false` for better performance when only node data is required.
+> The `includePosition` query parameter (boolean, default `false`) controls whether X (sibling position), Y (depth), and HasChildren values are computed and included in the response. Set to `true` when position data is needed for visualization; omit or set to `false` for better performance when only node data is required.
 
 ### Docker Deployment
 
