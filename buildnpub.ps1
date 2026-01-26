@@ -21,7 +21,9 @@ Write-Host "Build & Publish Script" -ForegroundColor Cyan
 $projectOrder = @(
     "TaxoStore.Core\TaxoStore.Core.csproj",
     "TaxoStore.Api.Controllers\TaxoStore.Api.Controllers.csproj",
-    "TaxoStore.PgSql\TaxoStore.PgSql.csproj"
+    "TaxoStore.PgSql\TaxoStore.PgSql.csproj",
+    "Cadmus.TaxoStore.Parts\Cadmus.TaxoStore.Parts.csproj",
+    "Cadmus.Seed.TaxoStore.Parts\Cadmus.Seed.TaxoStore.Parts.csproj"
 )
 
 if ($Pack) {

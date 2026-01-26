@@ -8,6 +8,7 @@
   </Folder>
   <Project Path="Cadmus.Seed.TaxoStore.Parts.Test/Cadmus.Seed.TaxoStore.Parts.Test.csproj" Id="8bdbf86f-2aac-4b76-8dd7-40310261ea37" />
   <Project Path="Cadmus.Seed.TaxoStore.Parts/Cadmus.Seed.TaxoStore.Parts.csproj" Id="c2c6b857-8963-4dcd-8a19-487a3198dbac" />
+  <Project Path="Cadmus.TaxoStore.Parts.Test/Cadmus.TaxoStore.Parts.Test.csproj" Id="8b9a35f6-57a8-4c93-9d2d-1550e525927f" />
   <Project Path="Cadmus.TaxoStore.Parts/Cadmus.TaxoStore.Parts.csproj" Id="9407bb2c-58f5-4903-a557-1c645ce1cc9f" />
   <Project Path="TaxoStore.Api.Controllers/TaxoStore.Api.Controllers.csproj" Id="2f821e30-2e08-43b8-87e8-dbc2f9902a75" />
   <Project Path="TaxoStore.Api/TaxoStore.Api.csproj" Id="5521e3d5-c196-4bcc-8219-f74b4bd1affa" />
