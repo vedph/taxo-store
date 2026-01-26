@@ -157,7 +157,7 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// <returns>An <see cref="OkObjectResult"/> containing the node with
     /// computed position (X/Y) if found; otherwise, a <see cref="NotFoundResult"/>
     /// if no node with the specified identifier exists.</returns>
-    [HttpGet("{id:int}", Name = "GetNode")]
+    [HttpGet("{id:int}", Name = "GetTaxoNode")]
     [Produces("application/json")]
     [ProducesResponseType(200)]
     [ProducesResponseType(404)]
@@ -283,7 +283,7 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
         TaxoNode node = model.ToNode();
 
         int id = await _store.AddNodeAsync(node);
-        return CreatedAtRoute("GetNode", new { id }, null);
+        return CreatedAtRoute("GetTaxoNode", new { id }, null);
     }
 
     /// <summary>
