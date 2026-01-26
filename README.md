@@ -151,10 +151,10 @@ app.Run();
 
 The TaxoStore supports automatic database seeding from CSV files. When the database is created for the first time, it will automatically import data from CSV files if they are present.
 
-By default, `AddTreeServices` looks for seed files at:
+By default, `AddTaxoStoreServices` looks for seed files at:
 
-- `wwwroot/trees/trees.csv`: tree definitions. Each tree is implicitly numbered with an ordinal when importing it, which makes it easier to refer nodes to it. The first imported tree is 1, the second 2, and so forth. So, in the nodes file you will refer to 1 for the first tree, 2 for the second, and so forth.
-- `wwwroot/trees/nodes.csv`: node data.
+- `wwwroot/taxo/trees.csv`: tree definitions. Each tree is implicitly numbered with an ordinal when importing it, which makes it easier to refer nodes to it. The first imported tree is 1, the second 2, and so forth. So, in the nodes file you will refer to 1 for the first tree, 2 for the second, and so forth.
+- `wwwroot/taxo/nodes.csv`: node data.
 
 If these files exist, they will be automatically used for seeding when the database is first created.
 
@@ -220,13 +220,13 @@ Note:
 
 Once integrated, the following endpoints become available:
 
-- **Tree Endpoints** (via `TreeController`):
+- **Tree Endpoints** (via `TaxoTreeController`):
   - `GET /api/taxostore/trees/{id}` - Get a tree by its ID (string key).
   - `GET /api/taxostore/trees` - Get paginated trees with filtering (query params: pageNumber, pageSize, name).
   - `POST /api/taxostore/trees` - Create or update a tree (body: TreeBindingModel with id, name, note).
   - `DELETE /api/taxostore/trees/{id}` - Delete a tree by its ID (string key).
 
-- **Node Endpoints** (via `NodeController`):
+- **Node Endpoints** (via `TaxoNodeController`):
   - `GET /api/taxostore/nodes/{id}` - Get a node by its numeric ID. Returns `PositionedNodeModel` with X/Y/HasChildren.
   - `GET /api/taxostore/nodes/tree/{treeId}/key/{key}` - Get a node by tree ID (string) and node key (string). Returns `PositionedNodeModel` with X/Y/HasChildren.
   - `GET /api/taxostore/nodes` - Get paginated nodes with filtering (query params: pageNumber, pageSize, treeId, parentId, key, parentKey, ancestorKey, filteredLabel, flags, flagMatchMode, isLeaf, includePosition).
@@ -268,7 +268,7 @@ using TaxoStore.Api.Controllers.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers()
-    .AddApplicationPart(typeof(TreeController).Assembly);
+    .AddApplicationPart(typeof(TaxoTreeController).Assembly);
 
 builder.Services.AddTaxoStoreServices(options =>
 {
