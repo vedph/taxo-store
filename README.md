@@ -119,7 +119,7 @@ builder.Services.AddControllers()
     .AddControllersAsServices();
 
 // Register TaxoStore services
-builder.Services.AddTreeServices(options =>
+builder.Services.AddTaxoStoreServices(options =>
 {
     string? connectionString = builder.Configuration
         .GetConnectionString("TaxoStore");
@@ -270,7 +270,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers()
     .AddApplicationPart(typeof(TreeController).Assembly);
 
-builder.Services.AddTreeServices(options =>
+builder.Services.AddTaxoStoreServices(options =>
 {
     options.ConnectionString = builder.Configuration
         .GetConnectionString("TaxoStore")!;

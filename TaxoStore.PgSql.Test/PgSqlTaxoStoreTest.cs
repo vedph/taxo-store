@@ -16,7 +16,7 @@ public sealed class PgSqlTaxoStoreTest
 {
     private const string CS_TEMPLATE =
         "User ID=postgres;Password=postgres;Host=localhost;Port=5432;Database={0}";
-    private const string DB_NAME = "tree-store-test";
+    private const string DB_NAME = "taxo-store-test";
 
     private const string TREES_CSV = @"id,name,note
 languages,Programming Languages,Programming languages taxonomy

@@ -61,7 +61,7 @@ public static class TaxoStoreServiceExtensions
     /// service options before registration.</param>
     /// <returns>The same instance of <see cref="IServiceCollection"/> that was
     /// provided, to support method chaining.</returns>
-    public static IServiceCollection AddTreeServices(
+    public static IServiceCollection AddTaxoStoreServices(
         this IServiceCollection services,
         Action<TaxoStoreServiceOptions>? configure = null)
     {

@@ -145,7 +145,7 @@ public static partial class Program
     private static void ConfigureTaxoStoreServices(IServiceCollection services,
         ConfigurationManager config)
     {
-        services.AddTreeServices(options =>
+        services.AddTaxoStoreServices(options =>
         {
             // get connection string
             string? connectionString = config.GetConnectionString("TaxoStore");
