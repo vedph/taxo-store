@@ -1,0 +1,40 @@
+{
+  "facets": [
+    {
+      "typeId": "it.vedph.taxo-store-nodes",
+      "name": "taxonomy nodes",
+      "description": "Taxonomy nodes.",
+      "colorKey": "31AB54",
+      "groupKey": "general",
+      "sortKey": "01"
+    }
+  ],
+  "seed": {
+    "options": {
+      "seed": 1,
+      "baseTextPartTypeId": "it.vedph.taxo-store-nodes",
+      "users": [ "zeus" ],
+      "partRoles": [],
+      "fragmentRoles": []
+    },
+    "partSeeders": [
+      {
+        "id": "seed.it.vedph.taxo-store-nodes",
+        "options ": {
+          "treeIds": [ "animals" ],
+          "nodes": [
+            {
+              "name": "cat",
+              "value": "animals/cat"
+            },
+            {
+              "name": "dog",
+              "value": "animals/dog"
+            }
+          ]
+        }
+      }
+    ],
+    "fragmentSeeders": []
+  }
+}

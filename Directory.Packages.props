@@ -5,12 +5,14 @@
   <ItemGroup>
     <!-- Unified version for all packages, e.g.: -->
     <PackageVersion Include="Cadmus.Seed" Version="10.0.1" />
+    <PackageVersion Include="Fusi.Microsoft.Extensions.Configuration.InMemoryJson" Version="5.0.0" />
     <PackageVersion Include="TaxoStore.Api" Version="0.0.1" />
     <PackageVersion Include="TaxoStore.Api.Controllers" Version="0.0.1" />
     <PackageVersion Include="TaxoStore.Core" Version="0.0.1" />
     <PackageVersion Include="TaxoStore.PgSql" Version="0.0.1" />
     <!-- External dependencies for all packages -->
     <PackageVersion Include="Cadmus.Core" Version="10.0.1" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="Fusi.Text" Version="6.0.0" />
     <PackageVersion Include="Fusi.Tools" Version="8.0.0" />
@@ -19,6 +21,7 @@
     <PackageVersion Include="Fusi.DbManager.PgSql" Version="6.0.1" />
     <PackageVersion Include="MessagingApi" Version="6.0.0" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="8.0.0" />
     <PackageVersion Include="Npgsql" Version="10.0.1" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
