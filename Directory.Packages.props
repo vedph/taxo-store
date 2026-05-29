@@ -4,12 +4,12 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- Unified version for all internal packages -->
-    <PackageVersion Include="Cadmus.Seed.TaxoStore.Parts" Version="0.0.4" />
-    <PackageVersion Include="Cadmus.TaxoStore.Parts" Version="0.0.4" />
-    <PackageVersion Include="TaxoStore.Api" Version="0.0.4" />
-    <PackageVersion Include="TaxoStore.Api.Controllers" Version="0.0.4" />
-    <PackageVersion Include="TaxoStore.Core" Version="0.0.4" />
-    <PackageVersion Include="TaxoStore.PgSql" Version="0.0.4" />
+    <PackageVersion Include="Cadmus.Seed.TaxoStore.Parts" Version="0.0.5" />
+    <PackageVersion Include="Cadmus.TaxoStore.Parts" Version="0.0.5" />
+    <PackageVersion Include="TaxoStore.Api" Version="0.0.5" />
+    <PackageVersion Include="TaxoStore.Api.Controllers" Version="0.0.5" />
+    <PackageVersion Include="TaxoStore.Core" Version="0.0.5" />
+    <PackageVersion Include="TaxoStore.PgSql" Version="0.0.5" />
     <!-- External dependencies for all packages -->
     <PackageVersion Include="Cadmus.Core" Version="10.0.6" />
     <PackageVersion Include="Cadmus.Seed" Version="10.1.5" />

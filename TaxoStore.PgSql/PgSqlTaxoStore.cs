@@ -480,8 +480,12 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                 new NpgsqlParameter("@treeId", filter.TreeId));
         }
 
-        // ParentId filter
-        if (filter.ParentId.HasValue)
+        // ParentId / IsRoot filter
+        if (filter.IsRoot)
+        {
+            whereClauses.Add("n.parent_id IS NULL");
+        }
+        else if (filter.ParentId.HasValue)
         {
             whereClauses.Add("n.parent_id = @parentId");
             parameters.Add(
@@ -529,10 +533,36 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         // FilteredLabel filter
         if (!string.IsNullOrEmpty(filter.FilteredLabel))
         {
-            whereClauses.Add("n.label_ix ILIKE @filteredLabel");
-            parameters.Add(
-                new NpgsqlParameter("@filteredLabel",
+            if (filter.MatchDescendants && string.IsNullOrEmpty(filter.AncestorKey))
+            {
+                // Reverse-recursive CTE: include a node if it or any descendant
+                // matches the label. Walk from matching leaf nodes upward.
+                // Note: mutually exclusive with AncestorKey.
+                string treeScope = !string.IsNullOrEmpty(filter.TreeId)
+                    ? " AND tree_id = @treeId"
+                    : string.Empty;
+                sql.Insert(0,
+                    "WITH RECURSIVE " +
+                    "lm(id) AS (" +
+                    "  SELECT id FROM node " +
+                    $"  WHERE label_ix ILIKE @filteredLabel{treeScope}" +
+                    "), " +
+                    "la(id, parent_id) AS (" +
+                    "  SELECT x.id, x.parent_id FROM node x INNER JOIN lm ON x.id = lm.id " +
+                    "  UNION " +
+                    "  SELECT x.id, x.parent_id FROM node x INNER JOIN la ON x.id = la.parent_id" +
+                    ") ");
+                whereClauses.Add("n.id IN (SELECT DISTINCT id FROM la)");
+                parameters.Add(new NpgsqlParameter("@filteredLabel",
                     $"%{filter.FilteredLabel}%"));
+            }
+            else
+            {
+                whereClauses.Add("n.label_ix ILIKE @filteredLabel");
+                parameters.Add(
+                    new NpgsqlParameter("@filteredLabel",
+                        $"%{filter.FilteredLabel}%"));
+            }
         }
 
         // Flags filter
@@ -640,7 +670,11 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                 new NpgsqlParameter("@treeId", filter.TreeId));
         }
 
-        if (filter.ParentId.HasValue)
+        if (filter.IsRoot)
+        {
+            whereClauses.Add("n.parent_id IS NULL");
+        }
+        else if (filter.ParentId.HasValue)
         {
             whereClauses.Add("n.parent_id = @parentId");
             parameters.Add(
@@ -679,10 +713,33 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
         if (!string.IsNullOrEmpty(filter.FilteredLabel))
         {
-            whereClauses.Add("n.label_ix ILIKE @filteredLabel");
-            parameters.Add(
-                new NpgsqlParameter("@filteredLabel",
+            if (filter.MatchDescendants && string.IsNullOrEmpty(filter.AncestorKey))
+            {
+                string treeScope = !string.IsNullOrEmpty(filter.TreeId)
+                    ? " AND tree_id = @treeId"
+                    : string.Empty;
+                sql.Insert(0,
+                    "WITH RECURSIVE " +
+                    "lm(id) AS (" +
+                    "  SELECT id FROM node " +
+                    $"  WHERE label_ix ILIKE @filteredLabel{treeScope}" +
+                    "), " +
+                    "la(id, parent_id) AS (" +
+                    "  SELECT x.id, x.parent_id FROM node x INNER JOIN lm ON x.id = lm.id " +
+                    "  UNION " +
+                    "  SELECT x.id, x.parent_id FROM node x INNER JOIN la ON x.id = la.parent_id" +
+                    ") ");
+                whereClauses.Add("n.id IN (SELECT DISTINCT id FROM la)");
+                parameters.Add(new NpgsqlParameter("@filteredLabel",
                     $"%{filter.FilteredLabel}%"));
+            }
+            else
+            {
+                whereClauses.Add("n.label_ix ILIKE @filteredLabel");
+                parameters.Add(
+                    new NpgsqlParameter("@filteredLabel",
+                        $"%{filter.FilteredLabel}%"));
+            }
         }
 
         if (!string.IsNullOrEmpty(filter.Flags))

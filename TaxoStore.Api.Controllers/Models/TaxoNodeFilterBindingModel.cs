@@ -85,6 +85,17 @@ public class TaxoNodeFilterBindingModel
     public bool IncludePosition { get; set; }
 
     /// <summary>
+    /// When true, restricts results to root nodes (parent_id IS NULL).
+    /// </summary>
+    public bool IsRoot { get; set; }
+
+    /// <summary>
+    /// When true and <see cref="FilteredLabel"/> is set, a node is included
+    /// if it directly matches the label OR if any of its descendants match.
+    /// </summary>
+    public bool MatchDescendants { get; set; }
+
+    /// <summary>
     /// Creates a new <see cref="TaxoNodeFilter"/> instance populated with the
     /// current filter criteria.
     /// </summary>
@@ -104,7 +115,9 @@ public class TaxoNodeFilterBindingModel
             FilteredLabel = FilteredLabel,
             Flags = Flags,
             FlagMatchMode = FlagMatchMode,
-            IsLeaf = IsLeaf
+            IsLeaf = IsLeaf,
+            IsRoot = IsRoot,
+            MatchDescendants = MatchDescendants
         };
     }
 }

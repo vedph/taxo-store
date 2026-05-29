@@ -57,6 +57,22 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
     public bool? IsLeaf { get; set; }
 
     /// <summary>
+    /// When true, restricts results to root nodes (parent_id IS NULL).
+    /// This allows using <see cref="GetNodesAsync"/> to query root nodes
+    /// with full filter support, without needing the dedicated GetRootNodes
+    /// endpoint.
+    /// </summary>
+    public bool IsRoot { get; set; }
+
+    /// <summary>
+    /// When true and <see cref="FilteredLabel"/> is set, a node is included
+    /// if it directly matches the label OR if any of its descendants match.
+    /// Implemented via a reverse-recursive CTE that walks from matching nodes
+    /// up to their ancestors.
+    /// </summary>
+    public bool MatchDescendants { get; set; }
+
+    /// <summary>
     /// Returns a string representing this object.
     /// </summary>
     /// <returns>String.</returns>
