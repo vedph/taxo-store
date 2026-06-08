@@ -18,8 +18,8 @@
     <PackageVersion Include="Fusi.Microsoft.Extensions.Configuration.InMemoryJson" Version="5.0.0" />
     <PackageVersion Include="Fusi.Text" Version="7.0.2" />
     <PackageVersion Include="Fusi.Tools" Version="8.0.3" />
-    <PackageVersion Include="Fusi.Api.Auth.Controllers" Version="7.0.1" />
-    <PackageVersion Include="Fusi.Api.Auth.Models" Version="7.0.1" />
+    <PackageVersion Include="Fusi.Api.Auth.Controllers" Version="7.0.2" />
+    <PackageVersion Include="Fusi.Api.Auth.Models" Version="7.0.2" />
     <PackageVersion Include="Fusi.DbManager.PgSql" Version="6.0.1" />
     <PackageVersion Include="MessagingApi" Version="6.0.0" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
