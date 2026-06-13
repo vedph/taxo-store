@@ -69,3 +69,25 @@ tree_n,parent_key,key,label,filtered_label,flags
 1,,mineral,minerals,minerals,,
 1,mineral,mineral.rock,minerals: rocks,minerals: rocks,
 1,mineral,mineral.gem,minerals: gems,minerals: gems,
+2,,fruit,fruits,fruits,,
+2,fruit,fruit.pome,fruits: pome fruits,fruits: pome fruits,,
+2,fruit.pome,fruit.pome.apple,fruits: pome fruits: apples,fruits: pome fruits: apples,RGY
+2,fruit.pome,fruit.pome.pear,fruits: pome fruits: pears,fruits: pome fruits: pears,GY
+2,fruit.pome,fruit.pome.quince,fruits: pome fruits: quinces,fruits: pome fruits: quinces,Y
+2,fruit,fruit.citrus,fruits: citrus fruits,fruits: citrus fruits,,
+2,fruit.citrus,fruit.citrus.orange,fruits: citrus fruits: oranges,fruits: citrus fruits: oranges,O
+2,fruit.citrus,fruit.citrus.lemon,fruits: citrus fruits: lemons,fruits: citrus fruits: lemons,Y
+2,fruit.citrus,fruit.citrus.lime,fruits: citrus fruits: limes,fruits: citrus fruits: limes,G
+2,fruit.citrus,fruit.citrus.grapefruit,fruits: citrus fruits: grapefruits,fruits: citrus fruits: grapefruits,PYR
+2,,vegetable,vegetables,vegetables,,
+2,vegetable,vegetable.leafy,vegetables: leafy greens,vegetables: leafy greens,,G
+2,vegetable.leafy,vegetable.leafy.spinach,vegetables: leafy greens: spinachs,vegetables: leafy greens: spinachs,G
+2,vegetable.leafy,vegetable.leafy.lettuce,vegetables: leafy greens: lettuces,vegetables: leafy greens: lettuces,GU
+2,vegetable.leafy,vegetable.leafy.cabbage,vegetables: leafy greens: cabbages,vegetables: leafy greens: cabbages,GUW
+2,vegetable,vegetable.root,vegetables: root vegetables,vegetables: root vegetables,,
+2,vegetable.root,vegetable.root.carrot,vegetables: root vegetables: carrots,vegetables: root vegetables: carrots,OUYW
+2,,legume,legumes & pulses,legumes & pulses,,
+2,legume,legume.bean,legumes & pulses: beans,legumes & pulses: beans,,
+2,legume.bean,legume.bean.kidney_bean,legumes & pulses: beans: kidney beans,legumes & pulses: beans: kidney beans,R
+2,legume.bean,legume.bean.black_bean,legumes & pulses: beans: black beans,legumes & pulses: beans: black beans,B
+2,legume.bean,legume.bean.chickpea,legumes & pulses: beans: chickpeas,legumes & pulses: beans: chickpeas,Y
