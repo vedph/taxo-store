@@ -11,25 +11,25 @@
     <PackageVersion Include="TaxoStore.Core" Version="0.0.5" />
     <PackageVersion Include="TaxoStore.PgSql" Version="0.0.5" />
     <!-- External dependencies for all packages -->
-    <PackageVersion Include="Cadmus.Core" Version="10.0.6" />
-    <PackageVersion Include="Cadmus.Seed" Version="10.1.5" />
+    <PackageVersion Include="Cadmus.Core" Version="14.0.2" />
+    <PackageVersion Include="Cadmus.Seed" Version="14.0.2" />
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="Fusi.Microsoft.Extensions.Configuration.InMemoryJson" Version="5.0.0" />
     <PackageVersion Include="Fusi.Text" Version="7.0.2" />
-    <PackageVersion Include="Fusi.Tools" Version="8.0.3" />
-    <PackageVersion Include="Fusi.Api.Auth.Controllers" Version="7.0.2" />
-    <PackageVersion Include="Fusi.Api.Auth.Models" Version="7.0.2" />
-    <PackageVersion Include="Fusi.DbManager.PgSql" Version="6.0.1" />
+    <PackageVersion Include="Fusi.Tools" Version="8.0.4" />
+    <PackageVersion Include="Fusi.Api.Auth.Controllers" Version="7.0.3" />
+    <PackageVersion Include="Fusi.Api.Auth.Models" Version="7.0.3" />
+    <PackageVersion Include="Fusi.DbManager.PgSql" Version="6.0.3" />
     <PackageVersion Include="MessagingApi" Version="6.0.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="8.0.0" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
-    <PackageVersion Include="Polly" Version="8.6.6" />
-    <PackageVersion Include="Scalar.AspNetCore" Version="2.14.14" />
-    <PackageVersion Include="Serilog" Version="4.3.1" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageVersion Include="Polly" Version="8.7.0" />
+    <PackageVersion Include="Scalar.AspNetCore" Version="2.16.11" />
+    <PackageVersion Include="Serilog" Version="4.4.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
