@@ -58,9 +58,7 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
 
     /// <summary>
     /// When true, restricts results to root nodes (parent_id IS NULL).
-    /// This allows using <see cref="GetNodesAsync"/> to query root nodes
-    /// with full filter support, without needing the dedicated GetRootNodes
-    /// endpoint.
+    /// This allows to query root nodes with full filter support.
     /// </summary>
     public bool IsRoot { get; set; }
 
