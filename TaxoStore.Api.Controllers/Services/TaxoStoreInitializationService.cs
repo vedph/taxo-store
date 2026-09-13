@@ -62,7 +62,7 @@ public sealed class TaxoStoreInitializationService : BackgroundService
             if (_delaySeconds > 0)
             {
                 _logger.LogInformation(
-                    "Waiting {DelaySeconds} seconds before database initialization...",
+                    "Waiting {DelaySeconds} seconds before TaxoStore initialization...",
                     _delaySeconds);
                 await Task.Delay(TimeSpan.FromSeconds(_delaySeconds), stoppingToken);
             }

@@ -47,10 +47,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
     private void Dispose(bool disposing)
     {
-        if (!_disposed)
-        {
-            _disposed = true;
-        }
+        if (!_disposed) _disposed = true;
     }
 
     /// <summary>
