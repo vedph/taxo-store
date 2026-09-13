@@ -73,9 +73,9 @@ Add packages to the required projects in your API's `.csproj` file (update versi
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="TaxoStore.Api.Controllers" Version="0.0.1" />
-  <PackageReference Include="TaxoStore.Core" Version="0.0.1" />
-  <PackageReference Include="TaxoStore.PgSql" Version="0.0.1" />
+  <PackageReference Include="TaxoStore.Api.Controllers" Version="0.0.6" />
+  <PackageReference Include="TaxoStore.Core" Version="0.0.6" />
+  <PackageReference Include="TaxoStore.PgSql" Version="0.0.6" />
 </ItemGroup>
 ```
 
