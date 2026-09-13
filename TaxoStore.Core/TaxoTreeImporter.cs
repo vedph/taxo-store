@@ -1,6 +1,8 @@
 ﻿using CsvHelper;
 using CsvHelper.Configuration;
 using Fusi.Text.Unicode;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -17,6 +19,7 @@ namespace TaxoStore.Core;
 public sealed class TaxoTreeImporter
 {
     private readonly ITaxoStore _store;
+    private readonly ILogger _logger;
     private readonly UniData _ud;
     private readonly HashSet<char> _whiteChars;
 
@@ -36,11 +39,14 @@ public sealed class TaxoTreeImporter
     /// </summary>
     /// <param name="store">The tree store to be used for importing tree data.
     /// </param>
+    /// <param name="logger">An optional logger used to report import progress
+    /// and diagnostics. When not provided, logging is disabled.</param>
     /// <exception cref="ArgumentNullException">Thrown if <paramref name="store"/>
     /// is null.</exception>
-    public TaxoTreeImporter(ITaxoStore store)
+    public TaxoTreeImporter(ITaxoStore store, ILogger? logger = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
+        _logger = logger ?? NullLogger.Instance;
         _ud = new UniData();
         _whiteChars =
         [
@@ -106,6 +112,8 @@ public sealed class TaxoTreeImporter
             Delimiter = Delimiter
         };
 
+        _logger.LogInformation("Starting TaxoStore CSV import");
+
         int nodesImported = 0;
         try
         {
@@ -114,7 +122,12 @@ public sealed class TaxoTreeImporter
             List<TaxoTree> trees = [];
 
             // read header and exit if none
-            if (!treeCsv.Read()) return 0;
+            if (!treeCsv.Read())
+            {
+                _logger.LogWarning(
+                    "Tree CSV source is empty; import aborted");
+                return 0;
+            }
             treeCsv.ReadHeader();
 
             // read trees from CSV having fields id, name, note
@@ -131,6 +144,7 @@ public sealed class TaxoTreeImporter
                 await _store.AddTreeAsync(tree);
                 trees.Add(tree);
             }
+            _logger.LogInformation("Imported {Count} tree(s)", trees.Count);
 
             // seed nodes using two-pass approach:
             // Pass 1: Insert all nodes without parent IDs
@@ -143,7 +157,12 @@ public sealed class TaxoTreeImporter
             using CsvReader nodeCsv = new(nodeReader, config);
 
             // read header and exit if none
-            if (!nodeCsv.Read()) return 0;
+            if (!nodeCsv.Read())
+            {
+                _logger.LogWarning(
+                    "Node CSV source is empty; no nodes imported");
+                return 0;
+            }
             nodeCsv.ReadHeader();
 
             // PASS 1: Read and insert all nodes without parent IDs
@@ -199,6 +218,9 @@ public sealed class TaxoTreeImporter
                     nodeKeyToIds[$"{nodes[i].TreeId}#{nodes[i].Key}"] = ids[i];
                 }
                 nodesImported = nodes.Count;
+                _logger.LogInformation(
+                    "Inserted {Count} node(s) (pass 1: no parent links)",
+                    nodesImported);
             }
 
             // PASS 2: Update parent IDs
@@ -230,11 +252,22 @@ public sealed class TaxoTreeImporter
                 List<TaxoNode> batch = nodesToUpdate.GetRange(i, batchSize);
                 await _store.AddNodesAsync(batch);
             }
+            if (nodesToUpdate.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Updated {Count} node(s) with parent references (pass 2)",
+                    nodesToUpdate.Count);
+            }
+
+            _logger.LogInformation(
+                "TaxoStore CSV import completed: {TreeCount} tree(s), " +
+                "{NodeCount} node(s)", trees.Count, nodesImported);
 
             return nodesImported;
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error importing TaxoStore CSV data");
             throw new InvalidOperationException(
                 "Error reading CSV header: " + ex.Message, ex);
         }

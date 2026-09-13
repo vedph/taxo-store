@@ -43,7 +43,9 @@ public static class TaxoStoreServiceExtensions
         services.AddSingleton<ITaxoStore>(sp =>
         {
             TaxoStoreOptions storeOptions = options.ToTaxoStoreOptions();
-            return new PgSqlTaxoStore(storeOptions);
+            ILogger<PgSqlTaxoStore> logger =
+                sp.GetRequiredService<ILogger<PgSqlTaxoStore>>();
+            return new PgSqlTaxoStore(storeOptions, logger);
         });
     }
 

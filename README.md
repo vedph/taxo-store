@@ -257,6 +257,8 @@ For Docker/containerized deployments where PostgreSQL may need startup time, con
 
 This ensures the API waits for PostgreSQL to be ready before attempting initialization.
 
+> When diagnosing seeding issues (e.g. a Docker deployment where the database is created but not seeded, or not created at all), check the application logs at `Information` level: `PgSqlTaxoStore` logs the connection target (host/port/database, credentials excluded), whether the database already existed, database creation, and seeding start/completion with tree/node counts. If a newly created database is left unseeded, a `Warning` explains why (missing or incomplete `SeedTreeSource`/`SeedNodeSource`). A common cause of "database not found" with no error logged is a misconfigured connection string that happens to point to an *existing* database (e.g. a copy-paste mistake reusing another service's connection string): the existence check then finds that unrelated database and silently skips creation of the intended one.
+
 ### Minimal Integration Example
 
 Here's a complete minimal example:

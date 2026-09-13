@@ -1,10 +1,13 @@
 ﻿using Fusi.DbManager.PgSql;
 using Fusi.Tools.Data;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using TaxoStore.Core;
 
@@ -16,8 +19,10 @@ namespace TaxoStore.PgSql;
 public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 {
     private readonly TaxoStoreOptions _options;
+    private readonly ILogger _logger;
     private readonly PgSqlDbManager _dbManager;
     private readonly string _connectionString;
+    private readonly SemaphoreSlim _initLock = new(1, 1);
     private bool _disposed;
     private bool _databaseReady;
 
@@ -27,11 +32,16 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// </summary>
     /// <param name="options">The options used to configure the tree store,
     /// including the PostgreSQL connection string.</param>
+    /// <param name="logger">An optional logger used to report database
+    /// initialization and seeding progress and diagnostics. When not
+    /// provided, logging is disabled.</param>
     /// <exception cref="ArgumentNullException">Thrown if the options parameter
     /// is null.</exception>
-    public PgSqlTaxoStore(TaxoStoreOptions options)
+    public PgSqlTaxoStore(TaxoStoreOptions options,
+        ILogger<PgSqlTaxoStore>? logger = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _logger = logger ?? NullLogger<PgSqlTaxoStore>.Instance;
 
         // replace DB name with placeholder
         NpgsqlConnectionStringBuilder builder = new(options.Source)
@@ -45,9 +55,29 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         _databaseReady = false;
     }
 
+    /// <summary>
+    /// Builds a connection description safe for logging, i.e. without
+    /// including the password.
+    /// </summary>
+    private string GetSafeConnectionDescription()
+    {
+        try
+        {
+            NpgsqlConnectionStringBuilder builder = new(_connectionString);
+            return $"Host={builder.Host};Port={builder.Port};" +
+                $"Database={builder.Database}";
+        }
+        catch (Exception)
+        {
+            return "(unavailable)";
+        }
+    }
+
     private void Dispose(bool disposing)
     {
-        if (!_disposed) _disposed = true;
+        if (_disposed) return;
+        if (disposing) _initLock.Dispose();
+        _disposed = true;
     }
 
     /// <summary>
@@ -76,48 +106,115 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
     private async Task EnsureDatabaseReady()
     {
+        // fast path: already initialized
         if (_databaseReady) return;
 
-        // check if database exists
-        string dbName = ExtractDbName(_connectionString) ??
-            throw new InvalidOperationException(
-                "Database name missing from connection string");
-        bool existing = _dbManager.Exists(dbName);
-        if (!existing)
+        // guard against concurrent callers (e.g. an incoming API request
+        // racing with the hosted initialization service, or several
+        // requests arriving before the first one completes initialization)
+        // trying to initialize the database at the same time
+        await _initLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            // create database and seed its schema from DDL SQL in assets
-            string sql = LoadResourceText("TaxoStore.PgSql.Assets.Schema.pgsql");
-            _dbManager.CreateDatabase(dbName, sql, null);
-        }
+            // re-check now that we hold the lock: another caller may have
+            // already completed initialization while we were waiting
+            if (_databaseReady) return;
 
-        // seed if not existing and seed sources were provided
-        if (!existing &&
-            !string.IsNullOrEmpty(_options.SeedTreeSource) &&
-            !string.IsNullOrEmpty(_options.SeedNodeSource))
-        {
-            TaxoTreeImporter importer = new(this);
+            string connectionInfo = GetSafeConnectionDescription();
 
-            if (_options.SeedSourceAsText)
+            // check if database exists
+            string dbName = ExtractDbName(_connectionString) ??
+                throw new InvalidOperationException(
+                    "Database name missing from connection string");
+
+            _logger.LogInformation(
+                "Checking TaxoStore database existence ({ConnectionInfo})",
+                connectionInfo);
+
+            bool existing = _dbManager.Exists(dbName);
+
+            if (existing)
             {
-                // create readers from direct CSV text
-                using StringReader treeReader =
-                    new(_options.SeedTreeSource);
-                using StringReader nodeReader =
-                    new(_options.SeedNodeSource);
-                await importer.ImportAsync(treeReader, nodeReader);
+                _logger.LogInformation(
+                    "TaxoStore database {Database} already exists; " +
+                    "skipping creation and seeding", dbName);
             }
             else
             {
-                // create readers from file paths
-                using StreamReader treeReader =
-                    new(_options.SeedTreeSource, Encoding.UTF8);
-                using StreamReader nodeReader =
-                    new(_options.SeedNodeSource, Encoding.UTF8);
-                await importer.ImportAsync(treeReader, nodeReader);
-            }
-        }
+                _logger.LogInformation(
+                    "TaxoStore database {Database} not found; creating it " +
+                    "({ConnectionInfo})", dbName, connectionInfo);
 
-        _databaseReady = true;
+                // create database and seed its schema from DDL SQL in assets
+                string sql =
+                    LoadResourceText("TaxoStore.PgSql.Assets.Schema.pgsql");
+                _dbManager.CreateDatabase(dbName, sql, null);
+
+                _logger.LogInformation(
+                    "TaxoStore database {Database} created", dbName);
+
+                // seed if seed sources were provided
+                bool hasTreeSource =
+                    !string.IsNullOrEmpty(_options.SeedTreeSource);
+                bool hasNodeSource =
+                    !string.IsNullOrEmpty(_options.SeedNodeSource);
+
+                if (hasTreeSource && hasNodeSource)
+                {
+                    _logger.LogInformation(
+                        "Seeding TaxoStore database {Database} from " +
+                        "configured sources", dbName);
+
+                    TaxoTreeImporter importer = new(this, _logger);
+
+                    if (_options.SeedSourceAsText)
+                    {
+                        // create readers from direct CSV text
+                        using StringReader treeReader =
+                            new(_options.SeedTreeSource!);
+                        using StringReader nodeReader =
+                            new(_options.SeedNodeSource!);
+                        await importer.ImportAsync(treeReader, nodeReader)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // create readers from file paths
+                        using StreamReader treeReader =
+                            new(_options.SeedTreeSource!, Encoding.UTF8);
+                        using StreamReader nodeReader =
+                            new(_options.SeedNodeSource!, Encoding.UTF8);
+                        await importer.ImportAsync(treeReader, nodeReader)
+                            .ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "TaxoStore database {Database} was created but not " +
+                        "seeded: {Reason}", dbName,
+                        hasTreeSource || hasNodeSource
+                            ? "only one of SeedTreeSource/SeedNodeSource " +
+                              "was provided; both are required"
+                            : "no SeedTreeSource/SeedNodeSource was " +
+                              "configured, and no default CSV files were " +
+                              "found");
+                }
+            }
+
+            _databaseReady = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Error ensuring TaxoStore database is ready ({ConnectionInfo})",
+                GetSafeConnectionDescription());
+            throw;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
     }
 
     /// <summary>

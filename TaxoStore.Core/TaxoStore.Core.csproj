@@ -31,6 +31,7 @@
 		<PackageReference Include="CsvHelper" />
 		<PackageReference Include="Fusi.Text" />
 		<PackageReference Include="Fusi.Tools" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
 	</ItemGroup>
 
 </Project>
