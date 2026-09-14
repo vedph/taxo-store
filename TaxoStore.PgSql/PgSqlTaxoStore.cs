@@ -23,6 +23,15 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     private readonly PgSqlDbManager _dbManager;
     private readonly string _connectionString;
     private readonly SemaphoreSlim _initLock = new(1, 1);
+
+    // flags the async call flow that is currently running the
+    // initialization/seeding logic inside EnsureDatabaseReady, so that
+    // calls made back into this same flow (e.g. the CSV importer calling
+    // AddTreeAsync/AddNodesAsync while seeding) can skip re-acquiring
+    // _initLock instead of deadlocking on it (SemaphoreSlim is not
+    // reentrant). This does not flow to unrelated concurrent callers, who
+    // must still wait on _initLock until seeding has fully completed.
+    private readonly AsyncLocal<bool> _initializing = new();
     private bool _disposed;
     private bool _databaseReady;
 
@@ -106,8 +115,12 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
     private async Task EnsureDatabaseReady()
     {
-        // fast path: already initialized
-        if (_databaseReady) return;
+        // fast path: already initialized, or this call is part of the same
+        // async flow that is currently performing initialization/seeding
+        // (e.g. the CSV importer calling back into AddTreeAsync/
+        // AddNodesAsync below) - re-entering the lock in that case would
+        // deadlock, since SemaphoreSlim is not reentrant
+        if (_databaseReady || _initializing.Value) return;
 
         // guard against concurrent callers (e.g. an incoming API request
         // racing with the hosted initialization service, or several
@@ -119,6 +132,11 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
             // re-check now that we hold the lock: another caller may have
             // already completed initialization while we were waiting
             if (_databaseReady) return;
+
+            // mark this async flow as the one performing initialization,
+            // so that nested calls it makes (seeding) skip the lock above
+            // instead of deadlocking on it
+            _initializing.Value = true;
 
             string connectionInfo = GetSafeConnectionDescription();
 
@@ -213,6 +231,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         }
         finally
         {
+            _initializing.Value = false;
             _initLock.Release();
         }
     }

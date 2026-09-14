@@ -54,6 +54,8 @@ So, a node key is granted to be unique only within its tree, not globally. If yo
 - `TaxoStore.PgSql`: PostgreSQL implementation of the store.
 - `TaxoStore.Api.Controllers`: ASP.NET Core Web API controllers and services for the store.
 - `TaxoStore.Api`: ASP.NET Core Web API host for the store. This is essentially for demo and testing purposes, as usually consumer APIs will integrate the controllers from `TaxoStore.Api.Controllers` in their own host. This API also includes authentication and authorization using JWT bearer tokens, because the controllers require authentication.
+- `TaxoStore.Cli.Core`: Spectre.Console.Cli commands shared by the command-line tool.
+- `taxo-tool`: command-line tool (see [Command-Line Tool](#command-line-tool-taxo-tool) below).
 
 ## Integration Guide
 
@@ -73,9 +75,9 @@ Add packages to the required projects in your API's `.csproj` file (update versi
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="TaxoStore.Api.Controllers" Version="0.0.6" />
-  <PackageReference Include="TaxoStore.Core" Version="0.0.6" />
-  <PackageReference Include="TaxoStore.PgSql" Version="0.0.6" />
+  <PackageReference Include="TaxoStore.Api.Controllers" Version="0.0.8" />
+  <PackageReference Include="TaxoStore.Core" Version="0.0.8" />
+  <PackageReference Include="TaxoStore.PgSql" Version="0.0.8" />
 </ItemGroup>
 ```
 
@@ -291,4 +293,34 @@ With corresponding `appsettings.json`:
     "TaxoStore": "Server=localhost;Database=taxo;User Id=postgres;Password=postgres"
   }
 }
+```
+
+## Command-Line Tool (taxo-tool)
+
+`taxo-tool` is a console application (`TaxoStore.Cli.Core` provides the commands, `Fusi.Cli.Config`/`Fusi.Cli.Logging` provide configuration and logging) that can create and seed a TaxoStore PostgreSQL database from CSV files outside of a running API host — e.g. for local setup, deployment scripts, or CI. It reuses the same initialization logic as the API (`PgSqlTaxoStore.InitializeAsync`): the database is created only if it does not already exist, and is seeded from the given CSV files immediately after creation; if the database already exists, the command does nothing.
+
+### import-store
+
+```sh
+taxo-tool import-store <TREES_CSV> <NODES_CSV> -d <DATABASE_NAME> [-c <CONNECTION_TEMPLATE>]
+```
+
+- `TREES_CSV`, `NODES_CSV`: paths to the seed CSV files (same format as [described above](#step-4-optional---seed-data-from-csv-files)).
+- `-d`/`--database`: name of the database to create and seed.
+- `-c`/`--connection`: optional PostgreSQL connection string template, with `{0}` as a placeholder for the database name (e.g. `Server=localhost;Database={0};User Id=postgres;Password=postgres`). When omitted, it is read from the `Default` connection string in the tool's own configuration (`appsettings.json`/`appsettings.local.json`/environment variables, resolved next to the tool's executable).
+
+Example `appsettings.json` next to `taxo-tool.exe`:
+
+```json
+{
+  "ConnectionStrings": {
+    "Default": "Server=localhost;Database={0};User Id=postgres;Password=postgres;Include Error Detail=True"
+  }
+}
+```
+
+Example usage, creating and seeding database `taxo`:
+
+```sh
+taxo-tool import-store wwwroot/taxo/trees.csv wwwroot/taxo/nodes.csv -d taxo
 ```

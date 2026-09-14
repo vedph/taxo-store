@@ -9,7 +9,7 @@
 		<Authors>Daniele Fusi</Authors>
 		<Company>Fusi</Company>
 		<Product>Cadmus</Product>
-		<Description>TaxoStore API components.</Description>
+		<Description>TaxoStore CLI core components.</Description>
 		<Copyright>by Daniele Fusi 2026</Copyright>
 		<NeutralLanguage>en-US</NeutralLanguage>
 		<PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
@@ -20,22 +20,22 @@
 		<PublishRepositoryUrl>true</PublishRepositoryUrl>
 		<EmbedUntrackedSources>true</EmbedUntrackedSources>
 		<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
-		<Deterministic>true</Deterministic>		
+		<Deterministic>true</Deterministic>
 	</PropertyGroup>
-
-	<ItemGroup>
-		<FrameworkReference Include="Microsoft.AspNetCore.App" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
-	</ItemGroup>
 
 	<PropertyGroup>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 	</PropertyGroup>
-	
-	<!-- internal packages: use references for development, packages for deployment -->
+
+	<ItemGroup>
+		<PackageReference Include="Fusi.Cli.Config" />
+		<PackageReference Include="Fusi.Cli.Logging" />
+		<PackageReference Include="Fusi.Tools" />
+		<PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+		<PackageReference Include="Spectre.Console" />
+		<PackageReference Include="Spectre.Console.Cli" />
+	</ItemGroup>
+
 	<ItemGroup Condition="'$(Configuration)'=='Debug'">
 		<ProjectReference Include="..\TaxoStore.Core\TaxoStore.Core.csproj" />
 		<ProjectReference Include="..\TaxoStore.PgSql\TaxoStore.PgSql.csproj" />
@@ -45,4 +45,5 @@
 		<PackageReference Include="TaxoStore.Core" />
 		<PackageReference Include="TaxoStore.PgSql" />
 	</ItemGroup>
+
 </Project>

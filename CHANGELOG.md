@@ -1,5 +1,11 @@
 # History
 
+## 0.0.8
+
+- 2026-09-14:
+  - fixes to importer (semaphore).
+  - added CLI tool for import.
+
 ## 0.0.7
 
 - 2026-09-13:

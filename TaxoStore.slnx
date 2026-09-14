@@ -10,8 +10,10 @@
   <Project Path="Cadmus.Seed.TaxoStore.Parts/Cadmus.Seed.TaxoStore.Parts.csproj" Id="c2c6b857-8963-4dcd-8a19-487a3198dbac" />
   <Project Path="Cadmus.TaxoStore.Parts.Test/Cadmus.TaxoStore.Parts.Test.csproj" Id="8b9a35f6-57a8-4c93-9d2d-1550e525927f" />
   <Project Path="Cadmus.TaxoStore.Parts/Cadmus.TaxoStore.Parts.csproj" Id="9407bb2c-58f5-4903-a557-1c645ce1cc9f" />
+  <Project Path="taxo-tool/taxo-tool.csproj" Id="f19fdd76-9de8-4b46-88a9-9440d0a25009" />
   <Project Path="TaxoStore.Api.Controllers/TaxoStore.Api.Controllers.csproj" Id="2f821e30-2e08-43b8-87e8-dbc2f9902a75" />
   <Project Path="TaxoStore.Api/TaxoStore.Api.csproj" Id="5521e3d5-c196-4bcc-8219-f74b4bd1affa" />
+  <Project Path="TaxoStore.Cli.Core/TaxoStore.Cli.Core.csproj" Id="2ec489db-dbdc-49db-9fd9-01c055fe03ed" />
   <Project Path="TaxoStore.Core/TaxoStore.Core.csproj" />
   <Project Path="TaxoStore.PgSql.Test/TaxoStore.PgSql.Test.csproj" />
   <Project Path="TaxoStore.PgSql/TaxoStore.PgSql.csproj" />

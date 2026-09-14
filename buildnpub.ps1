@@ -5,6 +5,8 @@
 #   .\buildnpub.ps1 -Pack -PushLocal
 # - to pack and push to NuGet.org:
 #   .\buildnpub.ps1 -Pack -PushNuGet
+# - to pack and push to both:
+#   .\buildnpub.ps1 -Pack -PushLocal -PushNuGet
 
 param(
     [switch]$Pack,
