@@ -29,7 +29,8 @@ $projectOrder = @(
     "Cadmus.TaxoStore.Parts\Cadmus.TaxoStore.Parts.csproj",
     # Layer 1: depends on Layer 0
     "TaxoStore.PgSql\TaxoStore.PgSql.csproj",                   # -> TaxoStore.Core
-    "Cadmus.Seed.TaxoStore.Parts\Cadmus.Seed.TaxoStore.Parts.csproj", # -> Cadmus.TaxoStore.Parts
+    "Cadmus.Seed.TaxoStore.Parts\Cadmus.Seed.TaxoStore.Parts.csproj", # -> Cadmus.TaxoStore.Parts,
+    "TaxoStore.Cli.Core\TaxoStore.Cli.Core.csproj",             # -> TaxoStore.Cli.Core
     # Layer 2: depends on Layer 1
     "TaxoStore.Api.Controllers\TaxoStore.Api.Controllers.csproj" # -> TaxoStore.Core, TaxoStore.PgSql
 )

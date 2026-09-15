@@ -40,7 +40,7 @@ public sealed class ImportStoreCommand : AsyncCommand<ImportStoreSettings>
             IConfiguration config = new ConfigurationBuilder()
                 .AddCliDefaults()
                 .Build();
-            template = config.GetConnectionString("Default");
+            template = config.GetConnectionString("TaxoStore");
         }
 
         if (string.IsNullOrEmpty(template))
