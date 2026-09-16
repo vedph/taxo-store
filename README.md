@@ -307,14 +307,14 @@ taxo-tool import-store <TREES_CSV> <NODES_CSV> -d <DATABASE_NAME> [-c <CONNECTIO
 
 - `TREES_CSV`, `NODES_CSV`: paths to the seed CSV files (same format as [described above](#step-4-optional---seed-data-from-csv-files)).
 - `-d`/`--database`: name of the database to create and seed.
-- `-c`/`--connection`: optional PostgreSQL connection string template, with `{0}` as a placeholder for the database name (e.g. `Server=localhost;Database={0};User Id=postgres;Password=postgres`). When omitted, it is read from the `Default` connection string in the tool's own configuration (`appsettings.json`/`appsettings.local.json`/environment variables, resolved next to the tool's executable).
+- `-c`/`--connection`: optional PostgreSQL connection string template, with `{0}` as a placeholder for the database name (e.g. `Server=localhost;Database={0};User Id=postgres;Password=postgres`). When omitted, it is read from the `TaxoStore` connection string in the tool's own configuration (`appsettings.json`/`appsettings.local.json`/environment variables, resolved next to the tool's executable).
 
 Example `appsettings.json` next to `taxo-tool.exe`:
 
 ```json
 {
   "ConnectionStrings": {
-    "Default": "Server=localhost;Database={0};User Id=postgres;Password=postgres;Include Error Detail=True"
+    "TaxoStore": "Server=localhost;Database={0};User Id=postgres;Password=postgres;Include Error Detail=True"
   }
 }
 ```
