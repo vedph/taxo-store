@@ -4,6 +4,7 @@
     <File Path="CHANGELOG.md" />
     <File Path="Directory.Build.props" />
     <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
     <File Path="README.md" />
   </Folder>
   <Project Path="Cadmus.Seed.TaxoStore.Parts.Test/Cadmus.Seed.TaxoStore.Parts.Test.csproj" Id="8bdbf86f-2aac-4b76-8dd7-40310261ea37" />

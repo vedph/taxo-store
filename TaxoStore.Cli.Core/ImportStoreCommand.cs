@@ -28,7 +28,7 @@ public sealed class ImportStoreCommand : AsyncCommand<ImportStoreSettings>
     /// <param name="context">The command context.</param>
     /// <param name="settings">The command settings.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    protected override async Task<int> ExecuteAsync(CommandContext context,
+    public override async Task<int> ExecuteAsync(CommandContext context,
         ImportStoreSettings settings, CancellationToken cancellationToken)
     {
         // resolve the connection string template, either from the command
