@@ -3,9 +3,11 @@ using Fusi.Tools.Data;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
+using NpgsqlTypes;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,10 +20,30 @@ namespace TaxoStore.PgSql;
 /// </summary>
 public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 {
+    // columns read by ReadNode, in this order, from a node aliased as n
+    private const string NODE_COLUMNS =
+        "n.id, n.parent_id, n.tree_id, n.key, n.label, n.label_ix, " +
+        "n.flags, n.note";
+
+    // max number of upsert commands sent to the server in a single batch
+    private const int WRITE_BATCH_SIZE = 500;
+
+    // the sibling position (1-based, siblings ordered by key) of a node
+    // aliased as t having columns id, parent_id, tree_id, key; the two
+    // branches allow using the (tree_id, parent_id, key) and (parent_id, key)
+    // indexes respectively
+    private const string SIBLING_POSITION_SQL =
+        "CASE WHEN t.parent_id IS NULL THEN " +
+        "(SELECT COUNT(*) FROM node s WHERE s.tree_id = t.tree_id " +
+        "AND s.parent_id IS NULL AND s.key <= t.key) " +
+        "ELSE (SELECT COUNT(*) FROM node s WHERE s.parent_id = t.parent_id " +
+        "AND s.key <= t.key) END";
+
     private readonly TaxoStoreOptions _options;
     private readonly ILogger _logger;
     private readonly PgSqlDbManager _dbManager;
     private readonly string _connectionString;
+    private readonly NpgsqlDataSource _dataSource;
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
     // flags the async call flow that is currently running the
@@ -33,7 +55,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     // must still wait on _initLock until seeding has fully completed.
     private readonly AsyncLocal<bool> _initializing = new();
     private bool _disposed;
-    private bool _databaseReady;
+    private volatile bool _databaseReady;
 
     /// <summary>
     /// Initializes a new instance of the PgSqlTaxoStore class using the
@@ -61,6 +83,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
         _dbManager = new PgSqlDbManager(csTemplate);
         _connectionString = options.Source;
+        _dataSource = NpgsqlDataSource.Create(_connectionString);
         _databaseReady = false;
     }
 
@@ -85,7 +108,11 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     private void Dispose(bool disposing)
     {
         if (_disposed) return;
-        if (disposing) _initLock.Dispose();
+        if (disposing)
+        {
+            _initLock.Dispose();
+            _dataSource.Dispose();
+        }
         _disposed = true;
     }
 
@@ -237,6 +264,16 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     }
 
     /// <summary>
+    /// Ensure that the database is ready, and open a new connection to it.
+    /// </summary>
+    /// <returns>The open connection.</returns>
+    private async Task<NpgsqlConnection> OpenConnectionAsync()
+    {
+        await EnsureDatabaseReady().ConfigureAwait(false);
+        return await _dataSource.OpenConnectionAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Ensure that the database is initialized.
     /// </summary>
     public async Task InitializeAsync()
@@ -244,6 +281,123 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         await EnsureDatabaseReady();
     }
 
+    #region Helpers
+    /// <summary>
+    /// Builds a pattern for a case-insensitive "contains" match via
+    /// <c>ILIKE</c>, escaping LIKE wildcards in the specified text so that
+    /// they are matched literally.
+    /// </summary>
+    /// <param name="text">The text to find.</param>
+    /// <returns>Pattern.</returns>
+    private static string BuildContainsPattern(string text)
+    {
+        // backslash is the default escape character for LIKE in PostgreSQL
+        return "%" + text.Replace("\\", "\\\\")
+            .Replace("%", "\\%")
+            .Replace("_", "\\_") + "%";
+    }
+
+    /// <summary>
+    /// Gets the limit and offset for the specified paging options, or null
+    /// when paging is disabled (page size is 0 or less).
+    /// </summary>
+    private static (int Limit, long Offset)? GetPaging(IPagingOptions options)
+    {
+        if (options.PageSize <= 0) return null;
+        int pageNumber = Math.Max(1, options.PageNumber);
+        return (options.PageSize, (long)(pageNumber - 1) * options.PageSize);
+    }
+
+    /// <summary>
+    /// Reads a page of items.
+    /// </summary>
+    /// <typeparam name="T">The type of item.</typeparam>
+    /// <param name="connection">The open connection.</param>
+    /// <param name="selectSql">The SQL query for items, including ORDER BY
+    /// but excluding paging. Its last column must be <c>COUNT(*) OVER()</c>,
+    /// i.e. the total count of the matching items.</param>
+    /// <param name="countSql">The SQL query counting all the matching items.
+    /// This is used only when the requested page is empty and beyond the first
+    /// one, so the total count cannot be got from the items query.</param>
+    /// <param name="parameters">The parameters for both queries.</param>
+    /// <param name="options">The paging options. When page size is 0, all
+    /// the items are returned.</param>
+    /// <param name="read">The function reading an item.</param>
+    /// <returns>The page.</returns>
+    private static async Task<DataPage<T>> ReadPageAsync<T>(
+        NpgsqlConnection connection,
+        string selectSql,
+        string countSql,
+        IList<NpgsqlParameter> parameters,
+        IPagingOptions options,
+        Func<NpgsqlDataReader, T> read)
+    {
+        (int Limit, long Offset)? paging = GetPaging(options);
+        List<T> items = [];
+        long total = 0;
+
+        await using (NpgsqlCommand command = connection.CreateCommand())
+        {
+            command.CommandText = paging == null
+                ? selectSql
+                : selectSql + " LIMIT @limit OFFSET @offset";
+            foreach (NpgsqlParameter p in parameters)
+                command.Parameters.Add(p.Clone());
+            if (paging != null)
+            {
+                command.Parameters.AddWithValue("limit", paging.Value.Limit);
+                command.Parameters.AddWithValue("offset", paging.Value.Offset);
+            }
+
+            await using NpgsqlDataReader reader =
+                await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(read(reader));
+                total = reader.GetInt64(reader.FieldCount - 1);
+            }
+        }
+
+        if (items.Count == 0 && paging?.Offset > 0)
+        {
+            await using NpgsqlCommand command = connection.CreateCommand();
+            command.CommandText = countSql;
+            foreach (NpgsqlParameter p in parameters)
+                command.Parameters.Add(p.Clone());
+            total = Convert.ToInt64(await command.ExecuteScalarAsync());
+        }
+
+        return paging == null
+            ? new DataPage<T>(1, (int)total, (int)total, items)
+            : new DataPage<T>(Math.Max(1, options.PageNumber),
+                options.PageSize, (int)total, items);
+    }
+
+    /// <summary>
+    /// Translates a PostgreSQL exception raised by a write operation into
+    /// the corresponding store exception, if any.
+    /// </summary>
+    private static Exception? TranslateWriteException(PostgresException ex)
+    {
+        return ex.SqlState switch
+        {
+            PostgresErrorCodes.UniqueViolation =>
+                new TaxoStoreConflictException(
+                    "Duplicate key: " + (ex.Detail ?? ex.MessageText), ex),
+            PostgresErrorCodes.ForeignKeyViolation =>
+                new ArgumentException(
+                    "Reference to a missing tree or node: " +
+                    (ex.Detail ?? ex.MessageText), ex),
+            PostgresErrorCodes.CheckViolation or
+            PostgresErrorCodes.NotNullViolation or
+            PostgresErrorCodes.StringDataRightTruncation =>
+                new ArgumentException("Invalid data: " + ex.MessageText, ex),
+            _ => null
+        };
+    }
+    #endregion
+
+    #region Trees
     /// <summary>
     /// Gets the tree with the specified ID.
     /// </summary>
@@ -251,23 +405,14 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <returns>Tree or null if not found.</returns>
     public async Task<TaxoTree?> GetTreeAsync(string id)
     {
-        await EnsureDatabaseReady();
-
         const string sql = "SELECT id, name, note FROM tree WHERE id = @id";
 
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("id", id);
 
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@id", id);
-
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        if (await reader.ReadAsync())
-        {
-            return ReadTree(reader);
-        }
-
-        return null;
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? ReadTree(reader) : null;
     }
 
     private static TaxoTree ReadTree(NpgsqlDataReader reader)
@@ -285,16 +430,17 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// </summary>
     /// <param name="tree">The tree to add or update.</param>
     /// <returns>The ID (key) of the tree which was added.</returns>
+    /// <exception cref="ArgumentException">Missing tree ID or name, or
+    /// invalid data.</exception>
     public async Task<string> AddTreeAsync(TaxoTree tree)
     {
         ArgumentNullException.ThrowIfNull(tree);
+        if (string.IsNullOrWhiteSpace(tree.Id))
+            throw new ArgumentException("Tree ID is required", nameof(tree));
+        if (string.IsNullOrWhiteSpace(tree.Name))
+            throw new ArgumentException("Tree name is required", nameof(tree));
 
-        await EnsureDatabaseReady();
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        // Insert or update tree with specified ID
+        // insert or update tree with specified ID
         const string sql =
             "INSERT INTO tree (id, name, note) " +
             "VALUES (@id, @name, @note) " +
@@ -302,33 +448,38 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
             "SET name = EXCLUDED.name, note = EXCLUDED.note " +
             "RETURNING id";
 
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@id", tree.Id);
-        command.Parameters.AddWithValue("@name", tree.Name);
-        command.Parameters.AddWithValue("@note",
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("id", tree.Id);
+        command.Parameters.AddWithValue("name", tree.Name);
+        command.Parameters.AddWithValue("note",
             (object?)tree.Note ?? DBNull.Value);
 
-        object? result = await command.ExecuteScalarAsync();
-        return result?.ToString() ?? tree.Id;
+        try
+        {
+            object? result = await command.ExecuteScalarAsync();
+            return result?.ToString() ?? tree.Id;
+        }
+        catch (PostgresException ex) when (TranslateWriteException(ex)
+            is Exception translated)
+        {
+            throw translated;
+        }
     }
 
     /// <summary>
-    /// Deletes the tree with the specified ID.
+    /// Deletes the tree with the specified ID, with all its nodes.
     /// </summary>
     /// <param name="id">The ID (key) of the tree to delete.</param>
     /// <returns>The ID (key) of the tree which was deleted, or null if it was
     /// not found.</returns>
     public async Task<string?> DeleteTreeAsync(string id)
     {
-        await EnsureDatabaseReady();
-
         const string sql = "DELETE FROM tree WHERE id = @id";
 
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@id", id);
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("id", id);
 
         int affected = await command.ExecuteNonQueryAsync();
         return affected > 0 ? id : null;
@@ -336,159 +487,34 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
     /// <summary>
     /// Retrieves a paged list of trees that match the specified filter
-    /// criteria.
+    /// criteria, sorted by name.
     /// </summary>
-    /// <param name="filter">The filter criteria.</param>
+    /// <param name="filter">The filter criteria. When page size is 0,
+    /// all the matching trees are returned.</param>
     /// <returns>A page of trees.</returns>
     public async Task<DataPage<TaxoTree>> GetTreesAsync(TaxoTreeFilter filter)
     {
         ArgumentNullException.ThrowIfNull(filter);
 
-        await EnsureDatabaseReady();
-
-        StringBuilder sql = new("SELECT id, name, note FROM tree");
-
-        // Build WHERE clause
+        string where = "";
+        List<NpgsqlParameter> parameters = [];
         if (!string.IsNullOrEmpty(filter.Name))
         {
-            sql.Append(" WHERE name ILIKE @name");
+            where = " WHERE name ILIKE @name";
+            parameters.Add(new NpgsqlParameter("name",
+                BuildContainsPattern(filter.Name)));
         }
 
-        // Add ORDER BY
-        sql.Append(" ORDER BY name");
-
-        // Get total count
-        int total = await GetTreesCountAsync(filter);
-
-        // Add pagination
-        sql.Append(" LIMIT @limit OFFSET @offset");
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql.ToString(), connection);
-
-        if (!string.IsNullOrEmpty(filter.Name))
-        {
-            command.Parameters.AddWithValue("@name",
-                $"%{filter.Name}%");
-        }
-
-        command.Parameters.AddWithValue("@limit", filter.PageSize);
-        command.Parameters.AddWithValue("@offset",
-            (filter.PageNumber - 1) * filter.PageSize);
-
-        List<TaxoTree> trees = [];
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            trees.Add(ReadTree(reader));
-        }
-
-        return new DataPage<TaxoTree>(
-            filter.PageNumber,
-            filter.PageSize,
-            total,
-            trees);
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        return await ReadPageAsync(connection,
+            $"SELECT id, name, note, COUNT(*) OVER() FROM tree{where} " +
+            "ORDER BY name, id",
+            $"SELECT COUNT(*) FROM tree{where}",
+            parameters, filter, ReadTree);
     }
+    #endregion
 
-    private async Task<int> GetTreesCountAsync(TaxoTreeFilter filter)
-    {
-        StringBuilder sql = new("SELECT COUNT(*) FROM tree");
-
-        if (!string.IsNullOrEmpty(filter.Name))
-        {
-            sql.Append(" WHERE name ILIKE @name");
-        }
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql.ToString(), connection);
-
-        if (!string.IsNullOrEmpty(filter.Name))
-        {
-            command.Parameters.AddWithValue("@name",
-                $"%{filter.Name}%");
-        }
-
-        object? result = await command.ExecuteScalarAsync();
-        return result != null ? Convert.ToInt32(result) : 0;
-    }
-
-    /// <summary>
-    /// Retrieves the root node(s) of the specified tree.
-    /// </summary>
-    /// <param name="treeId">The ID (key) of the tree.</param>
-    /// <param name="options">Paging options. If <see cref="PagingOptions.PageSize"/>
-    /// is 0, all root nodes are returned without paging.</param>
-    /// <returns>A page of root nodes. When page size is 0, the page contains
-    /// all root nodes.</returns>
-    public async Task<DataPage<TaxoNode>> GetRootNodes(
-        string treeId,
-        PagingOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-
-        await EnsureDatabaseReady();
-
-        // When pageSize is 0, return all root nodes without paging
-        bool noPaging = options.PageSize == 0;
-
-        string sql = noPaging
-            ? "SELECT id, parent_id, tree_id, key, label, label_ix, flags, " +
-              "note FROM node " +
-              "WHERE tree_id = @treeId AND parent_id IS NULL " +
-              "ORDER BY key"
-            : "SELECT id, parent_id, tree_id, key, label, label_ix, flags, " +
-              "note FROM node " +
-              "WHERE tree_id = @treeId AND parent_id IS NULL " +
-              "ORDER BY key " +
-              "LIMIT @limit OFFSET @offset";
-
-        const string countSql =
-            "SELECT COUNT(*) FROM node " +
-            "WHERE tree_id = @treeId AND parent_id IS NULL";
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        // Get total count
-        int total;
-        using (NpgsqlCommand countCommand = new(countSql, connection))
-        {
-            countCommand.Parameters.AddWithValue("@treeId", treeId);
-            object? result = await countCommand.ExecuteScalarAsync();
-            total = result != null ? Convert.ToInt32(result) : 0;
-        }
-
-        // Get nodes
-        List<TaxoNode> nodes = [];
-        using (NpgsqlCommand command = new(sql, connection))
-        {
-            command.Parameters.AddWithValue("@treeId", treeId);
-            if (!noPaging)
-            {
-                command.Parameters.AddWithValue("@limit", options.PageSize);
-                command.Parameters.AddWithValue("@offset",
-                    (options.PageNumber - 1) * options.PageSize);
-            }
-
-            using NpgsqlDataReader reader =
-                await command.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                nodes.Add(ReadNode(reader));
-            }
-        }
-
-        return new DataPage<TaxoNode>(
-            options.PageNumber,
-            noPaging ? total : options.PageSize,
-            total,
-            nodes);
-    }
-
+    #region Node Reads
     private static TaxoNode ReadNode(NpgsqlDataReader reader)
     {
         return new TaxoNode
@@ -504,6 +530,37 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         };
     }
 
+    private static async Task<List<TaxoNode>> ReadNodesAsync(
+        NpgsqlCommand command)
+    {
+        List<TaxoNode> nodes = [];
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) nodes.Add(ReadNode(reader));
+        return nodes;
+    }
+
+    /// <summary>
+    /// Retrieves the root node(s) of the specified tree, sorted by key.
+    /// </summary>
+    /// <param name="treeId">The ID (key) of the tree.</param>
+    /// <param name="options">Paging options. If <see cref="PagingOptions.PageSize"/>
+    /// is 0, all root nodes are returned without paging.</param>
+    /// <returns>A page of root nodes. When page size is 0, the page contains
+    /// all root nodes.</returns>
+    public Task<DataPage<TaxoNode>> GetRootNodes(string treeId,
+        PagingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        return GetNodesAsync(new TaxoNodeFilter
+        {
+            PageNumber = options.PageNumber,
+            PageSize = options.PageSize,
+            TreeId = treeId,
+            IsRoot = true
+        });
+    }
+
     /// <summary>
     /// Retrieves the node with the specified identifier.
     /// </summary>
@@ -511,25 +568,13 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <returns>The node or null if not found.</returns>
     public async Task<TaxoNode?> GetNodeAsync(int id)
     {
-        await EnsureDatabaseReady();
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(
+            $"SELECT {NODE_COLUMNS} FROM node n WHERE n.id = @id", connection);
+        command.Parameters.AddWithValue("id", id);
 
-        const string sql =
-            "SELECT id, parent_id, tree_id, key, label, label_ix, flags, " +
-            "note FROM node WHERE id = @id";
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@id", id);
-
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        if (await reader.ReadAsync())
-        {
-            return ReadNode(reader);
-        }
-
-        return null;
+        List<TaxoNode> nodes = await ReadNodesAsync(command);
+        return nodes.Count > 0 ? nodes[0] : null;
     }
 
     /// <summary>
@@ -542,564 +587,164 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// if no such node exists.</returns>
     public async Task<TaxoNode?> GetNodeFromKeyAsync(string treeId, string key)
     {
-        await EnsureDatabaseReady();
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(
+            $"SELECT {NODE_COLUMNS} FROM node n " +
+            "WHERE n.tree_id = @treeId AND n.key = @key", connection);
+        command.Parameters.AddWithValue("treeId", treeId);
+        command.Parameters.AddWithValue("key", key);
 
-        const string sql =
-            "SELECT id, parent_id, tree_id, key, label, label_ix, " +
-            "flags, note " +
-            "FROM node " +
-            "WHERE tree_id = @treeId AND key = @key";
+        List<TaxoNode> nodes = await ReadNodesAsync(command);
+        return nodes.Count > 0 ? nodes[0] : null;
+    }
 
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
+    /// <summary>
+    /// Builds the SQL parts for querying nodes (aliased as <c>n</c>) matching
+    /// the specified filter.
+    /// </summary>
+    /// <param name="filter">The filter.</param>
+    /// <returns>The CTEs prefix (empty or starting with <c>WITH</c>), the
+    /// FROM/WHERE body, and the parameters.</returns>
+    private static (string Ctes, string Body, List<NpgsqlParameter> Parameters)
+        BuildNodeQuery(TaxoNodeFilter filter)
+    {
+        List<string> ctes = [];
+        StringBuilder from = new(" FROM node n");
+        List<string> where = [];
+        List<NpgsqlParameter> parameters = [];
+        bool hasTree = !string.IsNullOrEmpty(filter.TreeId);
 
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@treeId", treeId);
-        command.Parameters.AddWithValue("@key", key);
-
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        if (await reader.ReadAsync())
+        // tree
+        if (hasTree)
         {
-            return ReadNode(reader);
+            where.Add("n.tree_id = @treeId");
+            parameters.Add(new NpgsqlParameter("treeId", filter.TreeId));
         }
 
-        return null;
+        // root or parent
+        if (filter.IsRoot)
+        {
+            where.Add("n.parent_id IS NULL");
+        }
+        else if (filter.ParentId.HasValue)
+        {
+            where.Add("n.parent_id = @parentId");
+            parameters.Add(new NpgsqlParameter("parentId",
+                filter.ParentId.Value));
+        }
+
+        // key (contains)
+        if (!string.IsNullOrEmpty(filter.Key))
+        {
+            where.Add("n.key ILIKE @key");
+            parameters.Add(new NpgsqlParameter("key",
+                BuildContainsPattern(filter.Key)));
+        }
+
+        // parent key (contains)
+        if (!string.IsNullOrEmpty(filter.ParentKey))
+        {
+            from.Append(" JOIN node p ON p.id = n.parent_id");
+            where.Add("p.key ILIKE @parentKey");
+            parameters.Add(new NpgsqlParameter("parentKey",
+                BuildContainsPattern(filter.ParentKey)));
+        }
+
+        // ancestor key (exact): descendants of the node(s) with that key;
+        // UNION (rather than UNION ALL) also guarantees termination
+        if (!string.IsNullOrEmpty(filter.AncestorKey))
+        {
+            ctes.Add("ad(id) AS (" +
+                "SELECT c.id FROM node a JOIN node c ON c.parent_id = a.id " +
+                "WHERE a.key = @ancestorKey" +
+                (hasTree ? " AND a.tree_id = @treeId" : "") +
+                " UNION " +
+                "SELECT c.id FROM ad JOIN node c ON c.parent_id = ad.id)");
+            where.Add("n.id IN (SELECT id FROM ad)");
+            parameters.Add(new NpgsqlParameter("ancestorKey",
+                filter.AncestorKey));
+        }
+
+        // filtered label (contains), optionally matching descendants
+        if (!string.IsNullOrEmpty(filter.FilteredLabel))
+        {
+            parameters.Add(new NpgsqlParameter("filteredLabel",
+                BuildContainsPattern(filter.FilteredLabel)));
+
+            if (filter.MatchDescendants)
+            {
+                // walk up from matching nodes to collect them and all their
+                // ancestors
+                ctes.Add("lm(id, parent_id) AS (" +
+                    "SELECT id, parent_id FROM node " +
+                    "WHERE label_ix ILIKE @filteredLabel" +
+                    (hasTree ? " AND tree_id = @treeId" : "") +
+                    " UNION " +
+                    "SELECT x.id, x.parent_id FROM lm " +
+                    "JOIN node x ON x.id = lm.parent_id)");
+                where.Add("n.id IN (SELECT id FROM lm)");
+            }
+            else
+            {
+                where.Add("n.label_ix ILIKE @filteredLabel");
+            }
+        }
+
+        // flags: each character is a flag
+        if (!string.IsNullOrEmpty(filter.Flags))
+        {
+            string[] flags = [.. filter.Flags.Distinct()
+                .Select(c => c.ToString())];
+            parameters.Add(new NpgsqlParameter("flags",
+                NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = flags });
+
+            // string_to_array with NULL delimiter splits into characters
+            const string nodeFlags = "string_to_array(n.flags, NULL)";
+            where.Add(filter.FlagMatchMode switch
+            {
+                NodeFlagMatchMode.All => $"{nodeFlags} @> @flags",
+                NodeFlagMatchMode.None => $"NOT ({nodeFlags} && @flags)",
+                _ => $"{nodeFlags} && @flags"
+            });
+        }
+
+        // leaf
+        if (filter.IsLeaf.HasValue)
+        {
+            where.Add((filter.IsLeaf.Value ? "NOT " : "") +
+                "EXISTS (SELECT 1 FROM node c WHERE c.parent_id = n.id)");
+        }
+
+        if (where.Count > 0)
+            from.Append(" WHERE ").Append(string.Join(" AND ", where));
+
+        string ctesSql = ctes.Count > 0
+            ? "WITH RECURSIVE " + string.Join(", ", ctes) + " "
+            : "";
+
+        return (ctesSql, from.ToString(), parameters);
     }
 
     /// <summary>
     /// Retrieves a paged list of nodes that match the specified filter
-    /// criteria.
+    /// criteria, sorted by key.
     /// </summary>
-    /// <param name="filter">The filter criteria.</param>
+    /// <param name="filter">The filter criteria. When page size is 0,
+    /// all the matching nodes are returned.</param>
     /// <returns>A page of nodes.</returns>
     public async Task<DataPage<TaxoNode>> GetNodesAsync(TaxoNodeFilter filter)
     {
         ArgumentNullException.ThrowIfNull(filter);
 
-        await EnsureDatabaseReady();
+        (string ctes, string body, List<NpgsqlParameter> parameters) =
+            BuildNodeQuery(filter);
 
-        StringBuilder sql = new(
-            "SELECT n.id, n.parent_id, n.tree_id, n.key, n.label, " +
-            "n.label_ix, n.flags, n.note FROM node n");
-
-        List<string> whereClauses = [];
-        List<NpgsqlParameter> parameters = [];
-
-        // TreeId filter
-        if (!string.IsNullOrEmpty(filter.TreeId))
-        {
-            whereClauses.Add("n.tree_id = @treeId");
-            parameters.Add(
-                new NpgsqlParameter("@treeId", filter.TreeId));
-        }
-
-        // ParentId / IsRoot filter
-        if (filter.IsRoot)
-        {
-            whereClauses.Add("n.parent_id IS NULL");
-        }
-        else if (filter.ParentId.HasValue)
-        {
-            whereClauses.Add("n.parent_id = @parentId");
-            parameters.Add(
-                new NpgsqlParameter("@parentId", filter.ParentId.Value));
-        }
-
-        // Key filter
-        if (!string.IsNullOrEmpty(filter.Key))
-        {
-            whereClauses.Add("n.key ILIKE @key");
-            parameters.Add(
-                new NpgsqlParameter("@key", $"%{filter.Key}%"));
-        }
-
-        // ParentKey filter
-        if (!string.IsNullOrEmpty(filter.ParentKey))
-        {
-            sql.Append(" JOIN node p ON n.parent_id = p.id");
-            whereClauses.Add("p.key ILIKE @parentKey");
-            parameters.Add(
-                new NpgsqlParameter("@parentKey", $"%{filter.ParentKey}%"));
-        }
-
-        // AncestorKey filter (requires recursive CTE)
-        if (!string.IsNullOrEmpty(filter.AncestorKey))
-        {
-            sql.Insert(0,
-                "WITH RECURSIVE ancestors AS (" +
-                "  SELECT id, parent_id, tree_id, key, label, " +
-                "label_ix, flags, note " +
-                "  FROM node " +
-                "  WHERE key ILIKE @ancestorKey " +
-                "  UNION ALL " +
-                "  SELECT n.id, n.parent_id, n.tree_id, n.key, n.label, " +
-                "n.label_ix, n.flags, n.note " +
-                "  FROM node n " +
-                "  INNER JOIN ancestors a ON n.parent_id = a.id" +
-                ") ");
-            sql.Replace("FROM node n", "FROM ancestors n");
-            parameters.Add(
-                new NpgsqlParameter("@ancestorKey",
-                    $"%{filter.AncestorKey}%"));
-        }
-
-        // FilteredLabel filter
-        if (!string.IsNullOrEmpty(filter.FilteredLabel))
-        {
-            if (filter.MatchDescendants && string.IsNullOrEmpty(filter.AncestorKey))
-            {
-                // Reverse-recursive CTE: include a node if it or any descendant
-                // matches the label. Walk from matching leaf nodes upward.
-                // Note: mutually exclusive with AncestorKey.
-                string treeScope = !string.IsNullOrEmpty(filter.TreeId)
-                    ? " AND tree_id = @treeId"
-                    : string.Empty;
-                sql.Insert(0,
-                    "WITH RECURSIVE " +
-                    "lm(id) AS (" +
-                    "  SELECT id FROM node " +
-                    $"  WHERE label_ix ILIKE @filteredLabel{treeScope}" +
-                    "), " +
-                    "la(id, parent_id) AS (" +
-                    "  SELECT x.id, x.parent_id FROM node x INNER JOIN lm ON x.id = lm.id " +
-                    "  UNION " +
-                    "  SELECT x.id, x.parent_id FROM node x INNER JOIN la ON x.id = la.parent_id" +
-                    ") ");
-                whereClauses.Add("n.id IN (SELECT DISTINCT id FROM la)");
-                parameters.Add(new NpgsqlParameter("@filteredLabel",
-                    $"%{filter.FilteredLabel}%"));
-            }
-            else
-            {
-                whereClauses.Add("n.label_ix ILIKE @filteredLabel");
-                parameters.Add(
-                    new NpgsqlParameter("@filteredLabel",
-                        $"%{filter.FilteredLabel}%"));
-            }
-        }
-
-        // Flags filter
-        if (!string.IsNullOrEmpty(filter.Flags))
-        {
-            switch (filter.FlagMatchMode)
-            {
-                case NodeFlagMatchMode.All:
-                    // All flags must be present
-                    foreach (char flag in filter.Flags)
-                    {
-                        string paramName = $"@flag{flag}";
-                        whereClauses.Add($"n.flags LIKE {paramName}");
-                        parameters.Add(
-                            new NpgsqlParameter(paramName, $"%{flag}%"));
-                    }
-                    break;
-
-                case NodeFlagMatchMode.Any:
-                    // At least one flag must be present
-                    List<string> flagConditions = [];
-                    foreach (char flag in filter.Flags)
-                    {
-                        string paramName = $"@flag{flag}";
-                        flagConditions.Add($"n.flags LIKE {paramName}");
-                        parameters.Add(
-                            new NpgsqlParameter(paramName, $"%{flag}%"));
-                    }
-                    if (flagConditions.Count > 0)
-                    {
-                        whereClauses.Add(
-                            $"({string.Join(" OR ", flagConditions)})");
-                    }
-                    break;
-            }
-        }
-
-        // IsLeaf filter
-        if (filter.IsLeaf.HasValue)
-        {
-            if (filter.IsLeaf.Value)
-            {
-                whereClauses.Add(
-                    "NOT EXISTS (SELECT 1 FROM node c " +
-                    "WHERE c.parent_id = n.id)");
-            }
-            else
-            {
-                whereClauses.Add(
-                    "EXISTS (SELECT 1 FROM node c " +
-                    "WHERE c.parent_id = n.id)");
-            }
-        }
-
-        // Build WHERE clause
-        if (whereClauses.Count > 0)
-        {
-            sql.Append(" WHERE ").Append(string.Join(" AND ", whereClauses));
-        }
-
-        // Order by key
-        sql.Append(" ORDER BY n.key");
-
-        // Get total count
-        int total = await GetNodesCountAsync(filter);
-
-        // Add pagination
-        sql.Append(" LIMIT @limit OFFSET @offset");
-        parameters.Add(new NpgsqlParameter("@limit", filter.PageSize));
-        parameters.Add(new NpgsqlParameter("@offset",
-            (filter.PageNumber - 1) * filter.PageSize));
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql.ToString(), connection);
-        command.Parameters.AddRange(parameters.ToArray());
-
-        List<TaxoNode> nodes = [];
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            nodes.Add(ReadNode(reader));
-        }
-
-        return new DataPage<TaxoNode>(
-            filter.PageNumber,
-            filter.PageSize,
-            total,
-            nodes);
-    }
-
-    private async Task<int> GetNodesCountAsync(TaxoNodeFilter filter)
-    {
-        StringBuilder sql = new("SELECT COUNT(*) FROM node n");
-
-        List<string> whereClauses = [];
-        List<NpgsqlParameter> parameters = [];
-
-        // Apply same filters as GetNodesAsync
-        if (!string.IsNullOrEmpty(filter.TreeId))
-        {
-            whereClauses.Add("n.tree_id = @treeId");
-            parameters.Add(
-                new NpgsqlParameter("@treeId", filter.TreeId));
-        }
-
-        if (filter.IsRoot)
-        {
-            whereClauses.Add("n.parent_id IS NULL");
-        }
-        else if (filter.ParentId.HasValue)
-        {
-            whereClauses.Add("n.parent_id = @parentId");
-            parameters.Add(
-                new NpgsqlParameter("@parentId", filter.ParentId.Value));
-        }
-
-        if (!string.IsNullOrEmpty(filter.Key))
-        {
-            whereClauses.Add("n.key ILIKE @key");
-            parameters.Add(
-                new NpgsqlParameter("@key", $"%{filter.Key}%"));
-        }
-
-        if (!string.IsNullOrEmpty(filter.ParentKey))
-        {
-            sql.Append(" JOIN node p ON n.parent_id = p.id");
-            whereClauses.Add("p.key ILIKE @parentKey");
-            parameters.Add(
-                new NpgsqlParameter("@parentKey", $"%{filter.ParentKey}%"));
-        }
-
-        if (!string.IsNullOrEmpty(filter.AncestorKey))
-        {
-            sql.Insert(0,
-                "WITH RECURSIVE ancestors AS (" +
-                "  SELECT id FROM node WHERE key ILIKE @ancestorKey " +
-                "  UNION ALL " +
-                "  SELECT n.id FROM node n " +
-                "  INNER JOIN ancestors a ON n.parent_id = a.id" +
-                ") SELECT COUNT(*) FROM ancestors n WHERE 1=1 ");
-            parameters.Add(
-                new NpgsqlParameter("@ancestorKey",
-                    $"%{filter.AncestorKey}%"));
-            whereClauses.Clear();
-        }
-
-        if (!string.IsNullOrEmpty(filter.FilteredLabel))
-        {
-            if (filter.MatchDescendants && string.IsNullOrEmpty(filter.AncestorKey))
-            {
-                string treeScope = !string.IsNullOrEmpty(filter.TreeId)
-                    ? " AND tree_id = @treeId"
-                    : string.Empty;
-                sql.Insert(0,
-                    "WITH RECURSIVE " +
-                    "lm(id) AS (" +
-                    "  SELECT id FROM node " +
-                    $"  WHERE label_ix ILIKE @filteredLabel{treeScope}" +
-                    "), " +
-                    "la(id, parent_id) AS (" +
-                    "  SELECT x.id, x.parent_id FROM node x INNER JOIN lm ON x.id = lm.id " +
-                    "  UNION " +
-                    "  SELECT x.id, x.parent_id FROM node x INNER JOIN la ON x.id = la.parent_id" +
-                    ") ");
-                whereClauses.Add("n.id IN (SELECT DISTINCT id FROM la)");
-                parameters.Add(new NpgsqlParameter("@filteredLabel",
-                    $"%{filter.FilteredLabel}%"));
-            }
-            else
-            {
-                whereClauses.Add("n.label_ix ILIKE @filteredLabel");
-                parameters.Add(
-                    new NpgsqlParameter("@filteredLabel",
-                        $"%{filter.FilteredLabel}%"));
-            }
-        }
-
-        if (!string.IsNullOrEmpty(filter.Flags))
-        {
-            switch (filter.FlagMatchMode)
-            {
-                case NodeFlagMatchMode.All:
-                    foreach (char flag in filter.Flags)
-                    {
-                        string paramName = $"@flag{flag}";
-                        whereClauses.Add($"n.flags LIKE {paramName}");
-                        parameters.Add(
-                            new NpgsqlParameter(paramName, $"%{flag}%"));
-                    }
-                    break;
-
-                case NodeFlagMatchMode.Any:
-                    List<string> flagConditions = [];
-                    foreach (char flag in filter.Flags)
-                    {
-                        string paramName = $"@flag{flag}";
-                        flagConditions.Add($"n.flags LIKE {paramName}");
-                        parameters.Add(
-                            new NpgsqlParameter(paramName, $"%{flag}%"));
-                    }
-                    if (flagConditions.Count > 0)
-                    {
-                        whereClauses.Add(
-                            $"({string.Join(" OR ", flagConditions)})");
-                    }
-                    break;
-            }
-        }
-
-        if (filter.IsLeaf.HasValue)
-        {
-            if (filter.IsLeaf.Value)
-            {
-                whereClauses.Add(
-                    "NOT EXISTS (SELECT 1 FROM node c " +
-                    "WHERE c.parent_id = n.id)");
-            }
-            else
-            {
-                whereClauses.Add(
-                    "EXISTS (SELECT 1 FROM node c " +
-                    "WHERE c.parent_id = n.id)");
-            }
-        }
-
-        if (whereClauses.Count > 0)
-        {
-            sql.Append(" WHERE ").Append(string.Join(" AND ", whereClauses));
-        }
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql.ToString(), connection);
-        command.Parameters.AddRange(parameters.ToArray());
-
-        object? result = await command.ExecuteScalarAsync();
-        return result != null ? Convert.ToInt32(result) : 0;
-    }
-
-    /// <summary>
-    /// Adds a new node to the collection.
-    /// </summary>
-    /// <param name="node">The node to add.</param>
-    /// <returns>The unique identifier assigned to the newly added node.
-    /// </returns>
-    public async Task<int> AddNodeAsync(TaxoNode node)
-    {
-        ArgumentNullException.ThrowIfNull(node);
-
-        await EnsureDatabaseReady();
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        if (node.Id == 0)
-        {
-            // Insert new node
-            const string sql =
-                "INSERT INTO node " +
-                "(parent_id, tree_id, key, label, label_ix, flags, note) " +
-                "VALUES (@parentId, @treeId, @key, @label, " +
-                "@labelIx, @flags, @note) RETURNING id";
-
-            using NpgsqlCommand command = new(sql, connection);
-            command.Parameters.AddWithValue("@parentId",
-                (object?)node.ParentId ?? DBNull.Value);
-            command.Parameters.AddWithValue("@treeId", node.TreeId);
-            command.Parameters.AddWithValue("@key", node.Key);
-            command.Parameters.AddWithValue("@label", node.Label);
-            command.Parameters.AddWithValue("@labelIx",
-                node.FilteredLabel);
-            command.Parameters.AddWithValue("@flags",
-                node.Flags ?? "");
-            command.Parameters.AddWithValue("@note",
-                (object?)node.Note ?? DBNull.Value);
-
-            object? result = await command.ExecuteScalarAsync();
-            return result != null ? Convert.ToInt32(result) : 0;
-        }
-        else
-        {
-            // Update or insert with specific ID
-            const string sql =
-                "INSERT INTO node " +
-                "(id, parent_id, tree_id, key, label, label_ix, flags, note) " +
-                "VALUES (@id, @parentId, @treeId, @key, @label, " +
-                "@labelIx, @flags, @note) " +
-                "ON CONFLICT (id) DO UPDATE " +
-                "SET parent_id = EXCLUDED.parent_id, " +
-                "tree_id = EXCLUDED.tree_id, key = EXCLUDED.key, " +
-                "label = EXCLUDED.label, label_ix = EXCLUDED.label_ix, " +
-                "flags = EXCLUDED.flags, note = EXCLUDED.note " +
-                "RETURNING id";
-
-            using NpgsqlCommand command = new(sql, connection);
-            command.Parameters.AddWithValue("@id", node.Id);
-            command.Parameters.AddWithValue("@parentId",
-                (object?)node.ParentId ?? DBNull.Value);
-            command.Parameters.AddWithValue("@treeId", node.TreeId);
-            command.Parameters.AddWithValue("@key", node.Key);
-            command.Parameters.AddWithValue("@label", node.Label);
-            command.Parameters.AddWithValue("@labelIx",
-                node.FilteredLabel);
-            command.Parameters.AddWithValue("@flags",
-                node.Flags ?? "");
-            command.Parameters.AddWithValue("@note",
-                (object?)node.Note ?? DBNull.Value);
-
-            object? result = await command.ExecuteScalarAsync();
-            return result != null ? Convert.ToInt32(result) : node.Id;
-        }
-    }
-
-    /// <summary>
-    /// Deletes the node with the specified identifier.
-    /// </summary>
-    /// <param name="id">The unique identifier of the node to delete.</param>
-    /// <returns>The ID of the deleted node, or 0 if the node was not found.
-    /// </returns>
-    public async Task<int> DeleteNodeAsync(int id)
-    {
-        await EnsureDatabaseReady();
-
-        const string sql = "DELETE FROM node WHERE id = @id";
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@id", id);
-
-        int affected = await command.ExecuteNonQueryAsync();
-        return affected > 0 ? id : 0;
-    }
-
-    /// <summary>
-    /// Adds the specified collection of nodes to the data store.
-    /// </summary>
-    /// <param name="nodes">The collection of nodes to add.</param>
-    /// <returns>A list of identifiers assigned to the nodes.</returns>
-    public async Task<IList<int>> AddNodesAsync(IEnumerable<TaxoNode> nodes)
-    {
-        ArgumentNullException.ThrowIfNull(nodes);
-
-        await EnsureDatabaseReady();
-
-        List<int> ids = [];
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        foreach (TaxoNode node in nodes)
-        {
-            int id = await AddNodeInternalAsync(connection, node);
-            ids.Add(id);
-        }
-
-        return ids;
-    }
-
-    private static async Task<int> AddNodeInternalAsync(
-        NpgsqlConnection connection,
-        TaxoNode node)
-    {
-        if (node.Id == 0)
-        {
-            // Insert new node
-            const string sql =
-                "INSERT INTO node " +
-                "(parent_id, tree_id, key, label, label_ix, flags, note) " +
-                "VALUES (@parentId, @treeId, @key, @label, " +
-                "@labelIx, @flags, @note) RETURNING id";
-
-            using NpgsqlCommand command = new(sql, connection);
-            command.Parameters.AddWithValue("@parentId",
-                (object?)node.ParentId ?? DBNull.Value);
-            command.Parameters.AddWithValue("@treeId", node.TreeId);
-            command.Parameters.AddWithValue("@key", node.Key);
-            command.Parameters.AddWithValue("@label", node.Label);
-            command.Parameters.AddWithValue("@labelIx",
-                node.FilteredLabel);
-            command.Parameters.AddWithValue("@flags",
-                node.Flags ?? "");
-            command.Parameters.AddWithValue("@note",
-                (object?)node.Note ?? DBNull.Value);
-
-            object? result = await command.ExecuteScalarAsync();
-            return result != null ? Convert.ToInt32(result) : 0;
-        }
-        else
-        {
-            // Update or insert with specific ID
-            const string sql =
-                "INSERT INTO node " +
-                "(id, parent_id, tree_id, key, label, label_ix, flags, note) " +
-                "VALUES (@id, @parentId, @treeId, @key, @label, " +
-                "@labelIx, @flags, @note) " +
-                "ON CONFLICT (id) DO UPDATE " +
-                "SET parent_id = EXCLUDED.parent_id, " +
-                "tree_id = EXCLUDED.tree_id, key = EXCLUDED.key, " +
-                "label = EXCLUDED.label, label_ix = EXCLUDED.label_ix, " +
-                "flags = EXCLUDED.flags, note = EXCLUDED.note " +
-                "RETURNING id";
-
-            using NpgsqlCommand command = new(sql, connection);
-            command.Parameters.AddWithValue("@id", node.Id);
-            command.Parameters.AddWithValue("@parentId",
-                (object?)node.ParentId ?? DBNull.Value);
-            command.Parameters.AddWithValue("@treeId", node.TreeId);
-            command.Parameters.AddWithValue("@key", node.Key);
-            command.Parameters.AddWithValue("@label", node.Label);
-            command.Parameters.AddWithValue("@labelIx",
-                node.FilteredLabel);
-            command.Parameters.AddWithValue("@flags",
-                node.Flags ?? "");
-            command.Parameters.AddWithValue("@note",
-                (object?)node.Note ?? DBNull.Value);
-
-            object? result = await command.ExecuteScalarAsync();
-            return result != null ? Convert.ToInt32(result) : node.Id;
-        }
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        return await ReadPageAsync(connection,
+            $"{ctes}SELECT {NODE_COLUMNS}, COUNT(*) OVER(){body} " +
+            "ORDER BY n.key, n.id",
+            $"{ctes}SELECT COUNT(*){body}",
+            parameters, filter, ReadNode);
     }
 
     /// <summary>
@@ -1110,19 +755,15 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <returns>True if the node has children; otherwise, false.</returns>
     public async Task<bool> NodeHasChildrenAsync(int id)
     {
-        await EnsureDatabaseReady();
-
         const string sql =
             "SELECT EXISTS(SELECT 1 FROM node WHERE parent_id = @id)";
 
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@id", id);
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("id", id);
 
         object? result = await command.ExecuteScalarAsync();
-        return result != null && (bool)result;
+        return result is true;
     }
 
     /// <summary>
@@ -1132,26 +773,13 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <returns>A list of child nodes, sorted by their key.</returns>
     public async Task<IList<TaxoNode>> GetChildNodesAsync(int parentId)
     {
-        await EnsureDatabaseReady();
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(
+            $"SELECT {NODE_COLUMNS} FROM node n " +
+            "WHERE n.parent_id = @parentId ORDER BY n.key, n.id", connection);
+        command.Parameters.AddWithValue("parentId", parentId);
 
-        const string sql =
-            "SELECT id, parent_id, tree_id, key, label, label_ix, flags, " +
-            "note FROM node WHERE parent_id = @parentId ORDER BY key";
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@parentId", parentId);
-
-        List<TaxoNode> nodes = [];
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            nodes.Add(ReadNode(reader));
-        }
-
-        return nodes;
+        return await ReadNodesAsync(command);
     }
 
     /// <summary>
@@ -1159,39 +787,30 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// a recursive query.
     /// </summary>
     /// <param name="parentId">The identifier of the parent node.</param>
-    /// <returns>A list of descendant nodes in traversal order.</returns>
+    /// <returns>A list of descendant nodes in depth-first (pre-order)
+    /// traversal order, with siblings sorted by key.</returns>
     public async Task<IList<TaxoNode>> GetDescendantNodesAsync(int parentId)
     {
-        await EnsureDatabaseReady();
-
+        // the sort path is the array of keys from the first descendant level
+        // down to each node: sorting by it yields a pre-order traversal
         const string sql =
-            "WITH RECURSIVE descendants AS (" +
-            "  SELECT id, parent_id, tree_id, key, label, label_ix, " +
-            "flags, note, 0 AS level " +
-            "  FROM node WHERE parent_id = @parentId " +
-            "  UNION ALL " +
-            "  SELECT n.id, n.parent_id, n.tree_id, n.key, n.label, " +
-            "n.label_ix, n.flags, n.note, d.level + 1 " +
-            "  FROM node n " +
-            "  INNER JOIN descendants d ON n.parent_id = d.id" +
-            ") " +
+            "WITH RECURSIVE d AS (" +
             "SELECT id, parent_id, tree_id, key, label, label_ix, flags, " +
-            "note FROM descendants ORDER BY level, key";
+            "note, ARRAY[key::text] AS sort_path " +
+            "FROM node WHERE parent_id = @parentId " +
+            "UNION ALL " +
+            "SELECT c.id, c.parent_id, c.tree_id, c.key, c.label, " +
+            "c.label_ix, c.flags, c.note, d.sort_path || c.key::text " +
+            "FROM node c JOIN d ON c.parent_id = d.id" +
+            ") CYCLE id SET is_cycle USING cycle_path " +
+            $"SELECT {NODE_COLUMNS} FROM d n WHERE NOT n.is_cycle " +
+            "ORDER BY n.sort_path";
 
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("parentId", parentId);
 
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@parentId", parentId);
-
-        List<TaxoNode> nodes = [];
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            nodes.Add(ReadNode(reader));
-        }
-
-        return nodes;
+        return await ReadNodesAsync(command);
     }
 
     /// <summary>
@@ -1202,37 +821,23 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <returns>A list of ancestor nodes.</returns>
     public async Task<IList<TaxoNode>> GetAncestorNodesAsync(int nodeId)
     {
-        await EnsureDatabaseReady();
-
         const string sql =
-            "WITH RECURSIVE ancestors AS (" +
-            "  SELECT n.id, n.parent_id, n.tree_id, n.key, n.label, " +
-            "n.label_ix, n.flags, n.note, 0 AS level " +
-            "  FROM node n " +
-            "  WHERE n.id = @nodeId " +
-            "  UNION ALL " +
-            "  SELECT p.id, p.parent_id, p.tree_id, p.key, p.label, " +
-            "p.label_ix, p.flags, p.note, a.level + 1 " +
-            "  FROM node p " +
-            "  INNER JOIN ancestors a ON p.id = a.parent_id" +
-            ") " +
+            "WITH RECURSIVE a AS (" +
             "SELECT id, parent_id, tree_id, key, label, label_ix, flags, " +
-            "note FROM ancestors WHERE level > 0 ORDER BY level";
+            "note, 0 AS level FROM node WHERE id = @nodeId " +
+            "UNION ALL " +
+            "SELECT p.id, p.parent_id, p.tree_id, p.key, p.label, " +
+            "p.label_ix, p.flags, p.note, a.level + 1 " +
+            "FROM node p JOIN a ON p.id = a.parent_id" +
+            ") CYCLE id SET is_cycle USING cycle_path " +
+            $"SELECT {NODE_COLUMNS} FROM a n " +
+            "WHERE n.level > 0 AND NOT n.is_cycle ORDER BY n.level";
 
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("nodeId", nodeId);
 
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@nodeId", nodeId);
-
-        List<TaxoNode> nodes = [];
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            nodes.Add(ReadNode(reader));
-        }
-
-        return nodes;
+        return await ReadNodesAsync(command);
     }
 
     /// <summary>
@@ -1242,61 +847,303 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <param name="nodeId">The identifier of the target node.</param>
     /// <param name="pageSize">The page size used to calculate page numbers.</param>
     /// <returns>A list of path steps from root to target.</returns>
-    public async Task<IList<TaxoNodePathStep>> GetNodePathAsync(int nodeId, int pageSize)
+    public async Task<IList<TaxoNodePathStep>> GetNodePathAsync(int nodeId,
+        int pageSize)
     {
         if (pageSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(pageSize),
                 "Page size must be greater than 0");
 
-        await EnsureDatabaseReady();
-
-        // This query:
-        // 1. Uses a recursive CTE to get the path from target to root
-        // 2. For each node, calculates its 1-based position among siblings
-        //    (siblings are nodes with the same parent, or all roots if parent is null)
-        // 3. Orders results from root to target (by descending level)
+        // get the path from target to root, and the 1-based position of
+        // each node among its siblings, ordering from root to target
         const string sql =
-            "WITH RECURSIVE path AS (" +
-            "  SELECT n.id, n.parent_id, n.tree_id, n.key, 0 AS level " +
-            "  FROM node n " +
-            "  WHERE n.id = @nodeId " +
-            "  UNION ALL " +
-            "  SELECT p.id, p.parent_id, p.tree_id, p.key, path.level + 1 " +
-            "  FROM node p " +
-            "  INNER JOIN path ON p.id = path.parent_id" +
-            ") " +
-            "SELECT " +
-            "  p.id, " +
-            "  (" +
-            "    SELECT COUNT(*) FROM node s " +
-            "    WHERE s.tree_id = p.tree_id " +
-            "    AND (" +
-            "      (p.parent_id IS NULL AND s.parent_id IS NULL) " +
-            "      OR s.parent_id = p.parent_id" +
-            "    ) " +
-            "    AND s.key <= p.key" +
-            "  ) AS sibling_position " +
-            "FROM path p " +
-            "ORDER BY p.level DESC";
+            "WITH RECURSIVE t AS (" +
+            "SELECT id, parent_id, tree_id, key, 0 AS level " +
+            "FROM node WHERE id = @nodeId " +
+            "UNION ALL " +
+            "SELECT p.id, p.parent_id, p.tree_id, p.key, t.level + 1 " +
+            "FROM node p JOIN t ON p.id = t.parent_id" +
+            ") CYCLE id SET is_cycle USING cycle_path " +
+            $"SELECT t.id, {SIBLING_POSITION_SQL} FROM t " +
+            "WHERE NOT t.is_cycle ORDER BY t.level DESC";
 
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        using NpgsqlCommand command = new(sql, connection);
-        command.Parameters.AddWithValue("@nodeId", nodeId);
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("nodeId", nodeId);
 
         List<TaxoNodePathStep> steps = [];
-        using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
             int id = reader.GetInt32(0);
-            int position = reader.GetInt32(1);
-            // Calculate page number: 1-based, ceiling division
-            int page = (position - 1) / pageSize + 1;
+            long position = reader.GetInt64(1);
+            int page = (int)((position - 1) / pageSize) + 1;
             steps.Add(new TaxoNodePathStep(id, page));
         }
 
         return steps;
+    }
+
+    /// <summary>
+    /// Gets the position of each of the specified nodes in its tree, i.e.
+    /// its depth (Y), its sibling position (X, with siblings ordered by key),
+    /// and whether it has children. All the positions are computed with a
+    /// single query.
+    /// </summary>
+    /// <param name="nodeIds">The IDs of the nodes.</param>
+    /// <returns>A dictionary where each key is a node ID and each value
+    /// is its position. Nodes not found are not included.</returns>
+    public async Task<IDictionary<int, TaxoNodePosition>> GetNodePositionsAsync(
+        IEnumerable<int> nodeIds)
+    {
+        ArgumentNullException.ThrowIfNull(nodeIds);
+
+        int[] ids = [.. nodeIds.Distinct()];
+        Dictionary<int, TaxoNodePosition> positions = [];
+        if (ids.Length == 0) return positions;
+
+        // the depth is the number of rows got by walking up from each node
+        const string sql =
+            "WITH RECURSIVE t AS (" +
+            "SELECT id, parent_id, tree_id, key FROM node WHERE id = ANY(@ids)" +
+            "), up(node_id, parent_id) AS (" +
+            "SELECT id, parent_id FROM t " +
+            "UNION ALL " +
+            "SELECT up.node_id, p.parent_id FROM up " +
+            "JOIN node p ON p.id = up.parent_id" +
+            ") CYCLE node_id, parent_id SET is_cycle USING cycle_path, " +
+            "depth AS (SELECT node_id, COUNT(*) AS y FROM up " +
+            "WHERE NOT is_cycle GROUP BY node_id) " +
+            $"SELECT t.id, depth.y, {SIBLING_POSITION_SQL}, " +
+            "EXISTS (SELECT 1 FROM node c WHERE c.parent_id = t.id) " +
+            "FROM t JOIN depth ON depth.node_id = t.id";
+
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("ids", ids);
+
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            int id = reader.GetInt32(0);
+            positions[id] = new TaxoNodePosition(id,
+                (int)reader.GetInt64(1),
+                (int)reader.GetInt64(2),
+                reader.GetBoolean(3));
+        }
+        return positions;
+    }
+    #endregion
+
+    #region Node Writes
+    private static void ValidateNode(TaxoNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        if (node.Id < 0)
+            throw new ArgumentException($"Invalid node ID: {node.Id}");
+        if (string.IsNullOrWhiteSpace(node.TreeId))
+            throw new ArgumentException($"Node {node} has no tree ID");
+        if (string.IsNullOrWhiteSpace(node.Key))
+            throw new ArgumentException($"Node {node} has no key");
+        if (node.Label == null)
+            throw new ArgumentException($"Node {node} has no label");
+        if (node.ParentId.HasValue && node.ParentId == node.Id)
+            throw new ArgumentException($"Node {node} cannot be its own parent");
+    }
+
+    private static NpgsqlBatchCommand CreateUpsertCommand(TaxoNode node)
+    {
+        NpgsqlBatchCommand command = new(node.Id == 0
+            // insert new node
+            ? "INSERT INTO node " +
+              "(parent_id, tree_id, key, label, label_ix, flags, note) " +
+              "VALUES (@parentId, @treeId, @key, @label, " +
+              "@labelIx, @flags, @note) RETURNING id"
+            // update or insert with specific ID
+            : "INSERT INTO node " +
+              "(id, parent_id, tree_id, key, label, label_ix, flags, note) " +
+              "VALUES (@id, @parentId, @treeId, @key, @label, " +
+              "@labelIx, @flags, @note) " +
+              "ON CONFLICT (id) DO UPDATE " +
+              "SET parent_id = EXCLUDED.parent_id, " +
+              "tree_id = EXCLUDED.tree_id, key = EXCLUDED.key, " +
+              "label = EXCLUDED.label, label_ix = EXCLUDED.label_ix, " +
+              "flags = EXCLUDED.flags, note = EXCLUDED.note " +
+              "RETURNING id");
+
+        if (node.Id != 0) command.Parameters.AddWithValue("id", node.Id);
+        command.Parameters.AddWithValue("parentId",
+            (object?)node.ParentId ?? DBNull.Value);
+        command.Parameters.AddWithValue("treeId", node.TreeId);
+        command.Parameters.AddWithValue("key", node.Key);
+        command.Parameters.AddWithValue("label", node.Label);
+        command.Parameters.AddWithValue("labelIx",
+            string.IsNullOrEmpty(node.FilteredLabel)
+                ? node.Label : node.FilteredLabel);
+        command.Parameters.AddWithValue("flags", node.Flags ?? "");
+        command.Parameters.AddWithValue("note",
+            (object?)node.Note ?? DBNull.Value);
+        return command;
+    }
+
+    /// <summary>
+    /// Ensures that the node ID sequence is beyond any existing node ID.
+    /// This is required after inserting nodes with an explicit ID, which
+    /// does not advance the sequence: otherwise, the next insertion of a
+    /// new node could get an already used ID. The sequence never moves
+    /// backwards, so this is safe with concurrent insertions.
+    /// </summary>
+    private static async Task SyncNodeSequenceAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction)
+    {
+        const string sql =
+            "SELECT setval('node_id_seq', GREATEST(" +
+            "(SELECT COALESCE(MAX(id), 1) FROM node), " +
+            "(SELECT last_value FROM node_id_seq)))";
+
+        await using NpgsqlCommand command = new(sql, connection, transaction);
+        await command.ExecuteScalarAsync();
+    }
+
+    /// <summary>
+    /// Validates the hierarchy of the specified (just written) nodes: each
+    /// node must belong to the same tree of its parent and children, and
+    /// must not be its own ancestor.
+    /// </summary>
+    /// <exception cref="ArgumentException">Invalid hierarchy.</exception>
+    private static async Task ValidateHierarchyAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction,
+        IList<int> ids)
+    {
+        const string treeSql =
+            "SELECT n.id FROM node n WHERE n.id = ANY(@ids) AND (" +
+            "EXISTS (SELECT 1 FROM node p " +
+            "WHERE p.id = n.parent_id AND p.tree_id <> n.tree_id) " +
+            "OR EXISTS (SELECT 1 FROM node c " +
+            "WHERE c.parent_id = n.id AND c.tree_id <> n.tree_id)) LIMIT 1";
+
+        await using (NpgsqlCommand command =
+            new(treeSql, connection, transaction))
+        {
+            command.Parameters.AddWithValue("ids", ids.ToArray());
+            if (await command.ExecuteScalarAsync() is int id)
+            {
+                throw new ArgumentException(
+                    $"Node {id} belongs to a tree different from its " +
+                    "parent or children");
+            }
+        }
+
+        const string cycleSql =
+            "WITH RECURSIVE up(start_id, id, parent_id) AS (" +
+            "SELECT id, id, parent_id FROM node " +
+            "WHERE id = ANY(@ids) AND parent_id IS NOT NULL " +
+            "UNION ALL " +
+            "SELECT up.start_id, p.id, p.parent_id FROM up " +
+            "JOIN node p ON p.id = up.parent_id" +
+            ") CYCLE id SET is_cycle USING cycle_path " +
+            "SELECT start_id FROM up WHERE is_cycle LIMIT 1";
+
+        await using (NpgsqlCommand command =
+            new(cycleSql, connection, transaction))
+        {
+            command.Parameters.AddWithValue("ids", ids.ToArray());
+            if (await command.ExecuteScalarAsync() is int id)
+            {
+                throw new ArgumentException(
+                    $"Node {id} cannot be a descendant of itself");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds a new node (when its ID is 0) or updates an existing one (when
+    /// its ID is greater than 0; if not found, it is added with that ID).
+    /// </summary>
+    /// <param name="node">The node to add.</param>
+    /// <returns>The ID of the added or updated node.</returns>
+    /// <exception cref="ArgumentException">Invalid node.</exception>
+    /// <exception cref="TaxoStoreConflictException">Duplicate key.</exception>
+    public async Task<int> AddNodeAsync(TaxoNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        IList<int> ids = await AddNodesAsync([node]);
+        return ids[0];
+    }
+
+    /// <summary>
+    /// Adds or updates the specified collection of nodes in a single
+    /// transaction.
+    /// </summary>
+    /// <param name="nodes">The collection of nodes to add.</param>
+    /// <returns>A list of identifiers assigned to the nodes.</returns>
+    /// <exception cref="ArgumentException">Invalid node.</exception>
+    /// <exception cref="TaxoStoreConflictException">Duplicate key.</exception>
+    public async Task<IList<int>> AddNodesAsync(IEnumerable<TaxoNode> nodes)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+
+        List<TaxoNode> list = [.. nodes];
+        foreach (TaxoNode node in list) ValidateNode(node);
+        if (list.Count == 0) return [];
+
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlTransaction transaction =
+            await connection.BeginTransactionAsync();
+
+        try
+        {
+            List<int> ids = new(list.Count);
+
+            // send upserts in batches to minimize round trips
+            for (int i = 0; i < list.Count; i += WRITE_BATCH_SIZE)
+            {
+                await using NpgsqlBatch batch = new(connection, transaction);
+                foreach (TaxoNode node in list.Skip(i).Take(WRITE_BATCH_SIZE))
+                    batch.BatchCommands.Add(CreateUpsertCommand(node));
+
+                await using NpgsqlDataReader reader =
+                    await batch.ExecuteReaderAsync();
+                do
+                {
+                    while (await reader.ReadAsync()) ids.Add(reader.GetInt32(0));
+                } while (await reader.NextResultAsync());
+            }
+
+            if (list.Any(n => n.Id > 0))
+                await SyncNodeSequenceAsync(connection, transaction);
+
+            await ValidateHierarchyAsync(connection, transaction, ids);
+
+            await transaction.CommitAsync();
+            return ids;
+        }
+        catch (PostgresException ex) when (TranslateWriteException(ex)
+            is Exception translated)
+        {
+            throw translated;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the node with the specified identifier, with all its
+    /// descendants.
+    /// </summary>
+    /// <param name="id">The unique identifier of the node to delete.</param>
+    /// <returns>The ID of the deleted node, or 0 if the node was not found.
+    /// </returns>
+    public async Task<int> DeleteNodeAsync(int id)
+    {
+        const string sql = "DELETE FROM node WHERE id = @id";
+
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue("id", id);
+
+        int affected = await command.ExecuteNonQueryAsync();
+        return affected > 0 ? id : 0;
     }
 
     /// <summary>
@@ -1306,23 +1153,10 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// </returns>
     public async Task ClearAsync()
     {
-        await EnsureDatabaseReady();
-
-        using NpgsqlConnection connection = new(_connectionString);
-        await connection.OpenAsync();
-
-        // Delete all data
-        using (NpgsqlCommand deleteCommand = new(
-            "DELETE FROM node; DELETE FROM tree;", connection))
-        {
-            await deleteCommand.ExecuteNonQueryAsync();
-        }
-
-        // Reset node sequence to start from 1
-        // Note: tree table uses VARCHAR id, not SERIAL, so no sequence exists
-        using NpgsqlCommand resetCommand = new(
-            "ALTER SEQUENCE node_id_seq RESTART WITH 1;",
-            connection);
-        await resetCommand.ExecuteNonQueryAsync();
+        await using NpgsqlConnection connection = await OpenConnectionAsync();
+        await using NpgsqlCommand command = new(
+            "TRUNCATE TABLE node, tree RESTART IDENTITY;", connection);
+        await command.ExecuteNonQueryAsync();
     }
+    #endregion
 }

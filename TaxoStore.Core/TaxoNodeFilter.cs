@@ -4,7 +4,8 @@ using System.Text;
 namespace TaxoStore.Core;
 
 /// <summary>
-/// A filter for <see cref="TaxoNode"/>'s.
+/// A filter for <see cref="TaxoNode"/>'s. When <see cref="PagingOptions.PageSize"/>
+/// is 0, paging is disabled and all the matching nodes are returned.
 /// </summary>
 public class TaxoNodeFilter : PagingOptions, IPagingOptions
 {
@@ -29,7 +30,10 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
     public string? ParentKey { get; set; }
 
     /// <summary>
-    /// The key of the ancestor node, if any.
+    /// The exact key of an ancestor node, if any. When set, only descendants
+    /// (at any depth) of the node(s) with this key are matched; the ancestor
+    /// node itself is not included. If <see cref="TreeId"/> is set, the
+    /// ancestor is searched only in that tree.
     /// </summary>
     public string? AncestorKey { get; set; }
 
@@ -45,6 +49,7 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
 
     /// <summary>
     /// The mode used to match node flags against <see cref="Flags"/>.
+    /// The default is <see cref="NodeFlagMatchMode.Any"/>.
     /// </summary>
     /// <remarks>The selected match mode determines how node flags are compared
     /// when performing flag-based operations.</remarks>
@@ -66,7 +71,8 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
     /// When true and <see cref="FilteredLabel"/> is set, a node is included
     /// if it directly matches the label OR if any of its descendants match.
     /// Implemented via a reverse-recursive CTE that walks from matching nodes
-    /// up to their ancestors.
+    /// up to their ancestors. This can be combined with
+    /// <see cref="AncestorKey"/>.
     /// </summary>
     public bool MatchDescendants { get; set; }
 
@@ -101,6 +107,10 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
         if (IsLeaf != null)
             sb.Append("IsLeaf=").Append(IsLeaf).Append(';');
 
+        if (IsRoot) sb.Append("IsRoot;");
+
+        if (MatchDescendants) sb.Append("MatchDescendants;");
+
         return sb.ToString();
     }
 }
@@ -115,7 +125,7 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
 public enum NodeFlagMatchMode
 {
     /// <summary>
-    /// No flag matching.
+    /// None of the specified flags must be present.
     /// </summary>
     None,
     /// <summary>

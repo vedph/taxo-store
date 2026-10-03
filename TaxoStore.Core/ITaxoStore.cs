@@ -96,12 +96,18 @@ public interface ITaxoStore
     public Task<DataPage<TaxoNode>> GetNodesAsync(TaxoNodeFilter filter);
 
     /// <summary>
-    /// Adds a new node to the collection.
+    /// Adds a new node (when its ID is 0) or updates an existing one (when
+    /// its ID is greater than 0; if no node with that ID exists, it is added
+    /// with that ID).
     /// </summary>
     /// <param name="node">The node to add. Cannot be null.</param>
     /// <returns>A task that represents the asynchronous operation. The task
-    /// result contains the unique identifier assigned to the newly added node.
-    /// </returns>
+    /// result contains the ID of the added or updated node.</returns>
+    /// <exception cref="System.ArgumentException">Invalid node data, e.g.
+    /// missing tree or key, a parent belonging to another tree, or a parent
+    /// which would create a cycle.</exception>
+    /// <exception cref="TaxoStoreConflictException">The node key is already
+    /// used by another node in the same tree.</exception>
     public Task<int> AddNodeAsync(TaxoNode node);
 
     /// <summary>
@@ -126,7 +132,11 @@ public interface ITaxoStore
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains a list of integers representing the identifiers assigned
     /// to the nodes (whether they were created or just updated), in the order
-    /// they were processed.</returns>
+    /// they were processed. The operation is atomic: if any node is invalid,
+    /// no node is saved.</returns>
+    /// <exception cref="System.ArgumentException">Invalid node data.</exception>
+    /// <exception cref="TaxoStoreConflictException">Duplicate node key.
+    /// </exception>
     public Task<IList<int>> AddNodesAsync(IEnumerable<TaxoNode> nodes);
 
     /// <summary>
@@ -155,8 +165,8 @@ public interface ITaxoStore
     /// <param name="parentId">The identifier of the parent node whose
     /// descendant nodes are to be retrieved.</param>
     /// <returns>A task that represents the asynchronous operation. The task
-    /// result contains a list of descendant nodes, in the nodes traversal order,
-    /// sorting siblings by their key. The list is empty if the parent node
+    /// result contains a list of descendant nodes, in depth-first (pre-order)
+    /// traversal order, sorting siblings by their key. The list is empty if the parent node
     /// has no descendants.</returns>
     public Task<IList<TaxoNode>> GetDescendantNodesAsync(int parentId);
 
@@ -193,6 +203,18 @@ public interface ITaxoStore
     /// and its 1-based page number among its siblings. Returns an empty list
     /// if the node does not exist.</returns>
     public Task<IList<TaxoNodePathStep>> GetNodePathAsync(int nodeId, int pageSize);
+
+    /// <summary>
+    /// Gets the position of each of the specified nodes in its tree, i.e.
+    /// its depth (Y), its sibling position (X, with siblings ordered by key),
+    /// and whether it has children.
+    /// </summary>
+    /// <param name="nodeIds">The IDs of the nodes.</param>
+    /// <returns>A task that represents the asynchronous operation. The task
+    /// result contains a dictionary where each key is a node ID and each value
+    /// is its position. Nodes not found are not included.</returns>
+    public Task<IDictionary<int, TaxoNodePosition>> GetNodePositionsAsync(
+        IEnumerable<int> nodeIds);
 
     /// <summary>
     /// Asynchronously removes all data from the store.

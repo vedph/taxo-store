@@ -18,7 +18,7 @@ public class TaxoTreeFilter : PagingOptions, IPagingOptions
     /// <returns>String.</returns>
     public override string ToString()
     {
-        return string.IsNullOrEmpty(nameof(Name))
+        return string.IsNullOrEmpty(Name)
             ? base.ToString(): $"Name={Name}";
     }
 }

@@ -24,7 +24,8 @@ public class TaxoNodeFilterBindingModel
     public int PageNumber { get; set; } = 1;
 
     /// <summary>
-    /// The page size for paginated results.
+    /// The page size for paginated results. When 0, paging is disabled
+    /// and all the matching nodes are returned.
     /// </summary>
     [Required]
     [Range(0, 100)]
@@ -33,6 +34,7 @@ public class TaxoNodeFilterBindingModel
     /// <summary>
     /// The node's tree ID (key).
     /// </summary>
+    [MaxLength(100)]
     public string? TreeId { get; set; }
 
     /// <summary>
@@ -43,34 +45,41 @@ public class TaxoNodeFilterBindingModel
     /// <summary>
     /// Any part of the node's key.
     /// </summary>
+    [MaxLength(500)]
     public string? Key { get; set; }
 
     /// <summary>
     /// Any part of the node's parent's key.
     /// </summary>
+    [MaxLength(500)]
     public string? ParentKey { get; set; }
 
     /// <summary>
-    /// The key of the ancestor node, if any.
+    /// The exact key of an ancestor node, if any: when set, only descendants
+    /// of the node(s) with this key are matched.
     /// </summary>
+    [MaxLength(500)]
     public string? AncestorKey { get; set; }
 
     /// <summary>
     /// Any part of the node's filtered label.
     /// </summary>
+    [MaxLength(1000)]
     public string? FilteredLabel { get; set; }
 
     /// <summary>
     /// The flags to match.
     /// </summary>
+    [MaxLength(50)]
     public string? Flags { get; set; }
 
     /// <summary>
-    /// The mode used to match node flags against <see cref="Flags"/>.
+    /// The mode used to match node flags against <see cref="Flags"/>:
+    /// any (default), all, or none of the specified flags.
     /// </summary>
     /// <remarks>The selected match mode determines how node flags are compared
     /// when performing flag-based operations.</remarks>
-    public NodeFlagMatchMode FlagMatchMode { get; set; }
+    public NodeFlagMatchMode FlagMatchMode { get; set; } = NodeFlagMatchMode.Any;
 
     /// <summary>
     /// True to match only leaf nodes (=nodes with no children), false to match

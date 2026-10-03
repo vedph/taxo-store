@@ -13,6 +13,7 @@ namespace TaxoStore.Api.Controllers;
 /// <param name="store"></param>
 [Authorize]
 [ApiController]
+[TaxoStoreExceptionFilter]
 [Route("api/taxostore/trees")]
 public sealed class TaxoTreeController(ITaxoStore store) : ControllerBase
 {
@@ -52,8 +53,7 @@ public sealed class TaxoTreeController(ITaxoStore store) : ControllerBase
         [FromQuery] TaxoTreeFilterBindingModel model)
     {
         TaxoTreeFilter filter = model.ToFilter();
-        DataPage<TaxoTree> result = await _store.GetTreesAsync(filter)
-            ;
+        DataPage<TaxoTree> result = await _store.GetTreesAsync(filter);
         return Ok(result);
     }
 
@@ -64,16 +64,18 @@ public sealed class TaxoTreeController(ITaxoStore store) : ControllerBase
     /// <param name="model">The data used to create the new tree. Must not be
     /// null.</param>
     /// <returns>A 201 Created response with a location header referencing the
-    /// newly created tree resource.</returns>
+    /// tree resource, and the tree ID in its body; 400 if the tree is invalid.
+    /// </returns>
     [HttpPost]
     [Produces("application/json")]
-    [ProducesResponseType(201)]
+    [ProducesResponseType(typeof(string), 201)]
+    [ProducesResponseType(400)]
     public async Task<IActionResult> AddTreeAsync(
         [FromBody] TaxoTreeBindingModel model)
     {
         TaxoTree tree = model.ToTree();
         string id = await _store.AddTreeAsync(tree);
-        return CreatedAtRoute("GetTree", new { id }, null);
+        return CreatedAtRoute("GetTree", new { id }, id);
     }
 
     /// <summary>

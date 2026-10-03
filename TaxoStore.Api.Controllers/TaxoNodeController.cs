@@ -21,55 +21,15 @@ namespace TaxoStore.Api.Controllers;
 /// node data.</param>
 [Authorize]
 [ApiController]
+[TaxoStoreExceptionFilter]
 [Route("api/taxostore/nodes")]
 public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
 {
     private readonly ITaxoStore _store = store;
 
     #region Position Helpers
-    /// <summary>
-    /// Computes the Y (depth) value for a node.
-    /// Y is 1-based: root nodes have Y=1, their children Y=2, etc.
-    /// </summary>
-    private async Task<int> ComputeYAsync(int nodeId)
-    {
-        IList<TaxoNode> ancestors = await _store.GetAncestorNodesAsync(nodeId);
-        return ancestors.Count + 1;
-    }
-
-    /// <summary>
-    /// Computes the X (sibling position) value for a node.
-    /// X is 1-based: first sibling (by key order) has X=1, etc.
-    /// </summary>
-    private async Task<int> ComputeXAsync(TaxoNode node)
-    {
-        IList<TaxoNode> siblings;
-        if (node.ParentId == null)
-        {
-            // Root node - get all root nodes for this tree
-            DataPage<TaxoNode> roots = await _store.GetRootNodes(node.TreeId,
-                new PagingOptions { PageNumber = 1, PageSize = 0 });
-            siblings = [.. roots.Items];
-        }
-        else
-        {
-            siblings = await _store.GetChildNodesAsync(node.ParentId.Value);
-        }
-
-        // Siblings are already sorted by key from the store
-        int position = 1;
-        foreach (TaxoNode sibling in siblings)
-        {
-            if (sibling.Id == node.Id) return position;
-            position++;
-        }
-        return 1; // Fallback (should not happen)
-    }
-
-    /// <summary>
-    /// Converts a Node to a PositionedNodeModel with computed X/Y/HasChildren.
-    /// </summary>
-    private async Task<PositionedTaxoNodeModel> ToPositionedModelAsync(TaxoNode node)
+    private static PositionedTaxoNodeModel ToPositionedModel(TaxoNode node,
+        TaxoNodePosition? position)
     {
         return new PositionedTaxoNodeModel
         {
@@ -81,72 +41,32 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
             FilteredLabel = node.FilteredLabel,
             Flags = node.Flags,
             Note = node.Note,
-            Y = await ComputeYAsync(node.Id),
-            X = await ComputeXAsync(node),
-            HasChildren = await _store.NodeHasChildrenAsync(node.Id)
+            Y = position?.Y ?? 1,
+            X = position?.X ?? 1,
+            HasChildren = position?.HasChildren ?? false
         };
     }
 
     /// <summary>
-    /// Converts a list of nodes to positioned models.
-    /// Uses caching to optimize sibling lookups.
+    /// Converts a list of nodes to positioned models, getting all the
+    /// positions with a single store call.
     /// </summary>
     private async Task<IList<PositionedTaxoNodeModel>> ToPositionedModelsAsync(
         IList<TaxoNode> nodes)
     {
         if (nodes.Count == 0) return [];
 
-        List<PositionedTaxoNodeModel> result = new(nodes.Count);
+        IDictionary<int, TaxoNodePosition> positions =
+            await _store.GetNodePositionsAsync(nodes.Select(n => n.Id));
 
-        // Cache sibling lists to avoid repeated queries for nodes sharing the same parent
-        Dictionary<(string TreeId, int? ParentId), IList<TaxoNode>> siblingCache = [];
+        return [.. nodes.Select(n => ToPositionedModel(n,
+            positions.TryGetValue(n.Id, out TaxoNodePosition? p) ? p : null))];
+    }
 
-        foreach (TaxoNode node in nodes)
-        {
-            // Get Y (depth)
-            int y = await ComputeYAsync(node.Id);
-
-            // Get X (sibling position) with caching
-            var cacheKey = (node.TreeId, node.ParentId);
-            if (!siblingCache.TryGetValue(cacheKey, out IList<TaxoNode>? siblings))
-            {
-                if (node.ParentId == null)
-                {
-                    DataPage<TaxoNode> roots = await _store.GetRootNodes(node.TreeId,
-                        new PagingOptions { PageNumber = 1, PageSize = 0 });
-                    siblings = [.. roots.Items];
-                }
-                else
-                {
-                    siblings = await _store.GetChildNodesAsync(node.ParentId.Value);
-                }
-                siblingCache[cacheKey] = siblings;
-            }
-
-            int x = 1;
-            foreach (TaxoNode sibling in siblings)
-            {
-                if (sibling.Id == node.Id) break;
-                x++;
-            }
-
-            result.Add(new PositionedTaxoNodeModel
-            {
-                Id = node.Id,
-                ParentId = node.ParentId,
-                TreeId = node.TreeId,
-                Key = node.Key,
-                Label = node.Label,
-                FilteredLabel = node.FilteredLabel,
-                Flags = node.Flags,
-                Note = node.Note,
-                Y = y,
-                X = x,
-                HasChildren = await _store.NodeHasChildrenAsync(node.Id)
-            });
-        }
-
-        return result;
+    private async Task<PositionedTaxoNodeModel> ToPositionedModelAsync(
+        TaxoNode node)
+    {
+        return (await ToPositionedModelsAsync([node]))[0];
     }
     #endregion
 
@@ -268,31 +188,38 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// Creates a new node in the data store using the specified node binding
     /// model.
     /// </summary>
-    /// <remarks>The response does not include a response body. The location
-    /// header can be used to retrieve the created node resource.</remarks>
+    /// <remarks>When the node ID is 0 a new node is created; otherwise, the
+    /// node with that ID is updated (or created with that ID if not found).
+    /// </remarks>
     /// <param name="model">The node data to create, provided in the request
     /// body. Must not be null.</param>
     /// <returns>A 201 Created response with a location header referencing
-    /// the newly created node.</returns>
+    /// the node, and the node ID in its body; 400 if the node is invalid
+    /// (e.g. missing tree or parent, parent in another tree, or parent
+    /// creating a cycle); 409 if its key is already used in the same
+    /// tree.</returns>
     [HttpPost]
     [Produces("application/json")]
-    [ProducesResponseType(201)]
+    [ProducesResponseType(typeof(int), 201)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(409)]
     public async Task<IActionResult> AddNodeAsync(
         [FromBody] TaxoNodeBindingModel model)
     {
         TaxoNode node = model.ToNode();
 
         int id = await _store.AddNodeAsync(node);
-        return CreatedAtRoute("GetTaxoNode", new { id }, null);
+        return CreatedAtRoute("GetTaxoNode", new { id }, id);
     }
 
     /// <summary>
     /// Adds a batch of nodes to the data store and returns their assigned
     /// identifiers.
     /// </summary>
-    /// <remarks>This operation processes all provided nodes in a single batch.
-    /// The response will include the identifiers assigned to each node
-    /// in the order they were processed.</remarks>
+    /// <remarks>This operation processes all provided nodes in a single
+    /// transaction: if any node is invalid, no node is saved. The response
+    /// will include the identifiers assigned to each node in the order they
+    /// were processed.</remarks>
     /// <param name="models">A collection of node binding models containing
     /// the data for each node to add. Cannot be null.</param>
     /// <returns>An <see cref="IActionResult"/> containing a JSON array of
@@ -300,6 +227,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     [HttpPost("batch")]
     [Produces("application/json")]
     [ProducesResponseType(200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(409)]
     public async Task<IActionResult> AddNodesAsync(
         [FromBody] IList<TaxoNodeBindingModel> models)
     {

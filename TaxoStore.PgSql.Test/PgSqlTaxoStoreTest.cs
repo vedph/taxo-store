@@ -685,4 +685,675 @@ fruits,Common Fruits,Common fruits classification
     }
 
     #endregion
+
+    #region Node Query Tests
+    // seed IDs: languages: prog=1, oop=2, func=3, csharp=4 (d), java=5,
+    // haskell=6 (o); fruits: fruit=7, citrus=8, berry=9, orange=10,
+    // lemon=11, strawberry=12
+
+    private static TaxoNodeFilter AllNodes(Action<TaxoNodeFilter>? set = null)
+    {
+        TaxoNodeFilter filter = new() { PageNumber = 1, PageSize = 100 };
+        set?.Invoke(filter);
+        return filter;
+    }
+
+    private static string[] Keys(DataPage<TaxoNode> page) =>
+        [.. page.Items.Select(n => n.Key)];
+
+    [Fact]
+    public async Task GetNodesAsync_AncestorKey_ReturnsDescendantsOnly()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            AllNodes(f => f.AncestorKey = "oop"));
+
+        Assert.Equal(2, page.Total);
+        Assert.Equal(["csharp", "java"], Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_AncestorKeyRoot_ReturnsAllDescendants()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            AllNodes(f => { f.AncestorKey = "prog"; f.TreeId = "languages"; }));
+
+        Assert.Equal(5, page.Total);
+        Assert.DoesNotContain("prog", Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_AncestorKeyIsExact_ReturnsNoneForPartialKey()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            AllNodes(f => f.AncestorKey = "oo"));
+
+        Assert.Equal(0, page.Total);
+        Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_AncestorKeyOtherTree_ReturnsNone()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            AllNodes(f => { f.AncestorKey = "oop"; f.TreeId = "fruits"; }));
+
+        Assert.Equal(0, page.Total);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_AncestorKeyWithOtherFilters_CombinesThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.AncestorKey = "prog";
+            f.IsLeaf = true;
+            f.Flags = "d";
+        }));
+
+        Assert.Equal(["csharp"], Keys(page));
+        Assert.Equal(1, page.Total);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_AncestorKeyAndMatchDescendants_CombinesThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        // descendants of prog matching "java" directly or via descendants
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.AncestorKey = "prog";
+            f.FilteredLabel = "java";
+            f.MatchDescendants = true;
+        }));
+
+        Assert.Equal(["java", "oop"], Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_MatchDescendants_ReturnsMatchingAncestors()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.TreeId = "fruits";
+            f.IsRoot = true;
+            f.FilteredLabel = "lemon";
+            f.MatchDescendants = true;
+        }));
+
+        Assert.Equal(["fruit"], Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_MatchDescendantsNoMatch_ReturnsNone()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.TreeId = "fruits";
+            f.IsRoot = true;
+            f.FilteredLabel = "haskell";
+            f.MatchDescendants = true;
+        }));
+
+        Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_ParentKey_ReturnsChildren()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            AllNodes(f => f.ParentKey = "citrus"));
+
+        Assert.Equal(["lemon", "orange"], Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_IsRoot_ReturnsRoots()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            AllNodes(f => f.IsRoot = true));
+
+        Assert.Equal(["fruit", "prog"], Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_IsLeafFalse_ReturnsParents()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            AllNodes(f => { f.TreeId = "languages"; f.IsLeaf = false; }));
+
+        Assert.Equal(["func", "oop", "prog"], Keys(page));
+    }
+
+    [Theory]
+    [InlineData(NodeFlagMatchMode.Any, "do", new[] { "csharp", "haskell" })]
+    [InlineData(NodeFlagMatchMode.All, "d", new[] { "csharp" })]
+    [InlineData(NodeFlagMatchMode.All, "do", new string[0])]
+    [InlineData(NodeFlagMatchMode.None, "do",
+        new[] { "func", "java", "oop", "prog" })]
+    public async Task GetNodesAsync_Flags_MatchesByMode(NodeFlagMatchMode mode,
+        string flags, string[] expected)
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.TreeId = "languages";
+            f.Flags = flags;
+            f.FlagMatchMode = mode;
+        }));
+
+        Assert.Equal(expected, Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_SpecialAndRepeatedFlags_Work()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "languages", ParentId = 1, Key = "rust",
+            Label = "Rust", FilteredLabel = "rust", Flags = "-%"
+        });
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.Flags = "%%-";
+            f.FlagMatchMode = NodeFlagMatchMode.All;
+        }));
+        Assert.Equal(["rust"], Keys(page));
+
+        // flags are not LIKE wildcards
+        page = await store.GetNodesAsync(AllNodes(f => f.Flags = "_"));
+        Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_LikeWildcardsInText_AreLiteral()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "languages", ParentId = 1, Key = "x_100%",
+            Label = "100% x", FilteredLabel = "100% x"
+        });
+
+        Assert.Equal(["x_100%"], Keys(await store.GetNodesAsync(
+            AllNodes(f => f.Key = "_100%"))));
+        Assert.Equal(["x_100%"], Keys(await store.GetNodesAsync(
+            AllNodes(f => f.FilteredLabel = "0% "))));
+        Assert.Empty((await store.GetNodesAsync(
+            AllNodes(f => f.Key = "c_ar"))).Items);
+        Assert.Equal(["x_100%"], Keys(await store.GetNodesAsync(
+            AllNodes(f => f.FilteredLabel = "%"))));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_Paging_ReturnsPageWithTotal()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(new TaxoNodeFilter
+        {
+            PageNumber = 2,
+            PageSize = 5,
+            TreeId = "fruits"
+        });
+
+        Assert.Equal(6, page.Total);
+        Assert.Equal(2, page.PageNumber);
+        Assert.Equal(5, page.PageSize);
+        Assert.Equal(2, page.PageCount);
+        Assert.Equal(["strawberry"], Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_PageBeyondEnd_ReturnsEmptyWithTotal()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(new TaxoNodeFilter
+        {
+            PageNumber = 5,
+            PageSize = 5,
+            TreeId = "fruits"
+        });
+
+        Assert.Empty(page.Items);
+        Assert.Equal(6, page.Total);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_PageSizeZero_ReturnsAll()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(new TaxoNodeFilter
+        {
+            PageNumber = 1,
+            PageSize = 0
+        });
+
+        Assert.Equal(12, page.Total);
+        Assert.Equal(12, page.Items.Count);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_PageSizeZeroNoMatch_ReturnsEmpty()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(new TaxoNodeFilter
+        {
+            PageNumber = 1,
+            PageSize = 0,
+            Key = "nothing-like-this"
+        });
+
+        Assert.Equal(0, page.Total);
+        Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    public async Task GetRootNodes_Paging_ReturnsPage()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "languages", Key = "a-root", Label = "A",
+            FilteredLabel = "a"
+        });
+
+        DataPage<TaxoNode> page = await store.GetRootNodes("languages",
+            new PagingOptions { PageNumber = 2, PageSize = 1 });
+
+        Assert.Equal(2, page.Total);
+        Assert.Equal(["prog"], Keys(page));
+    }
+
+    [Fact]
+    public async Task GetTreesAsync_Paging_ReturnsPage()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoTree> page = await store.GetTreesAsync(new TaxoTreeFilter
+        {
+            PageNumber = 2,
+            PageSize = 1
+        });
+
+        Assert.Equal(2, page.Total);
+        Assert.Equal("languages", Assert.Single(page.Items).Id);
+    }
+
+    [Fact]
+    public async Task GetTreesAsync_NameWithWildcard_IsLiteral()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoTree> page = await store.GetTreesAsync(new TaxoTreeFilter
+        {
+            PageNumber = 1,
+            PageSize = 10,
+            Name = "%"
+        });
+
+        Assert.Equal(0, page.Total);
+    }
+    #endregion
+
+    #region Node Hierarchy Tests
+    [Fact]
+    public async Task GetDescendantNodesAsync_ReturnsPreOrder()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        IList<TaxoNode> nodes = await store.GetDescendantNodesAsync(1);
+
+        Assert.Equal(["func", "haskell", "oop", "csharp", "java"],
+            nodes.Select(n => n.Key));
+    }
+
+    [Fact]
+    public async Task GetDescendantNodesAsync_Leaf_ReturnsEmpty()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        Assert.Empty(await store.GetDescendantNodesAsync(4));
+    }
+
+    [Fact]
+    public async Task GetNodePositionsAsync_ReturnsPositions()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        IDictionary<int, TaxoNodePosition> positions =
+            await store.GetNodePositionsAsync([1, 3, 2, 5, 7, 11, 999, 5]);
+
+        Assert.Equal(6, positions.Count);
+        Assert.Equal(new TaxoNodePosition(1, 1, 1, true), positions[1]);
+        // func before oop
+        Assert.Equal(new TaxoNodePosition(3, 2, 1, true), positions[3]);
+        Assert.Equal(new TaxoNodePosition(2, 2, 2, true), positions[2]);
+        // java after csharp
+        Assert.Equal(new TaxoNodePosition(5, 3, 2, false), positions[5]);
+        Assert.Equal(new TaxoNodePosition(7, 1, 1, true), positions[7]);
+        // lemon before orange
+        Assert.Equal(new TaxoNodePosition(11, 3, 1, false), positions[11]);
+        Assert.False(positions.ContainsKey(999));
+    }
+
+    [Fact]
+    public async Task GetNodePositionsAsync_Empty_ReturnsEmpty()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        Assert.Empty(await store.GetNodePositionsAsync([]));
+    }
+
+    [Fact]
+    public async Task GetNodePathAsync_SiblingPages_AreCorrect()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        IList<TaxoNodePathStep> path = await store.GetNodePathAsync(10, 1);
+
+        // fruit (only root), citrus (after berry), orange (after lemon)
+        Assert.Equal([new(7, 1), new(8, 2), new(10, 2)], path);
+    }
+    #endregion
+
+    #region Node Write Tests
+    [Fact]
+    public async Task AddNodeAsync_Update_UpdatesNode()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = (await store.GetNodeAsync(5))!;
+        node.Label = "Java!";
+        node.Flags = "x";
+
+        int id = await store.AddNodeAsync(node);
+
+        Assert.Equal(5, id);
+        TaxoNode saved = (await store.GetNodeAsync(5))!;
+        Assert.Equal("Java!", saved.Label);
+        Assert.Equal("x", saved.Flags);
+        Assert.Equal(2, saved.ParentId);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_ExplicitNewId_AdvancesSequence()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        int id = await store.AddNodeAsync(new TaxoNode
+        {
+            Id = 50, TreeId = "languages", ParentId = 1, Key = "go",
+            Label = "Go", FilteredLabel = "go"
+        });
+        Assert.Equal(50, id);
+
+        // a new node must not collide with the explicit ID
+        int next = await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "languages", ParentId = 1, Key = "rust",
+            Label = "Rust", FilteredLabel = "rust"
+        });
+        Assert.True(next > 50);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_DuplicateKey_ThrowsConflict()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await Assert.ThrowsAsync<TaxoStoreConflictException>(() =>
+            store.AddNodeAsync(new TaxoNode
+            {
+                TreeId = "languages", ParentId = 1, Key = "java",
+                Label = "Java 2", FilteredLabel = "java 2"
+            }));
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_SameKeyInOtherTree_Succeeds()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        int id = await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "fruits", ParentId = 7, Key = "java",
+            Label = "Java coffee", FilteredLabel = "java coffee"
+        });
+
+        Assert.True(id > 0);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_MissingParent_ThrowsArgument()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(new TaxoNode
+            {
+                TreeId = "languages", ParentId = 999, Key = "x",
+                Label = "X", FilteredLabel = "x"
+            }));
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_MissingTree_ThrowsArgument()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(new TaxoNode
+            {
+                TreeId = "none", Key = "x", Label = "X", FilteredLabel = "x"
+            }));
+    }
+
+    [Theory]
+    [InlineData("", "k")]
+    [InlineData("languages", "")]
+    [InlineData("languages", " ")]
+    public async Task AddNodeAsync_MissingTreeOrKey_ThrowsArgument(
+        string treeId, string key)
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(new TaxoNode
+            {
+                TreeId = treeId, Key = key, Label = "X", FilteredLabel = "x"
+            }));
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_ParentInOtherTree_ThrowsArgumentAndRollsBack()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(new TaxoNode
+            {
+                TreeId = "languages", ParentId = 7, Key = "kotlin",
+                Label = "Kotlin", FilteredLabel = "kotlin"
+            }));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("languages", "kotlin"));
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_MoveToOtherTreeWithChildren_ThrowsArgument()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode oop = (await store.GetNodeAsync(2))!;
+        oop.TreeId = "fruits";
+        oop.ParentId = 7;
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(oop));
+
+        Assert.Equal("languages", (await store.GetNodeAsync(2))!.TreeId);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_OwnParent_ThrowsArgument()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = (await store.GetNodeAsync(2))!;
+        node.ParentId = 2;
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(node));
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_DescendantAsParent_ThrowsArgumentAndRollsBack()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        // prog under its grandchild csharp
+        TaxoNode prog = (await store.GetNodeAsync(1))!;
+        prog.ParentId = 4;
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(prog));
+
+        Assert.Null((await store.GetNodeAsync(1))!.ParentId);
+        Assert.Equal(5, (await store.GetDescendantNodesAsync(1)).Count);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_MoveNode_UpdatesHierarchy()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        // move java under func
+        TaxoNode java = (await store.GetNodeAsync(5))!;
+        java.ParentId = 3;
+
+        await store.AddNodeAsync(java);
+
+        Assert.Equal(["haskell", "java"],
+            (await store.GetChildNodesAsync(3)).Select(n => n.Key));
+    }
+
+    [Fact]
+    public async Task AddNodesAsync_InvalidNode_RollsBackAll()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await Assert.ThrowsAsync<TaxoStoreConflictException>(() =>
+            store.AddNodesAsync([
+                new TaxoNode
+                {
+                    TreeId = "languages", ParentId = 1, Key = "go",
+                    Label = "Go", FilteredLabel = "go"
+                },
+                new TaxoNode
+                {
+                    TreeId = "languages", ParentId = 1, Key = "java",
+                    Label = "Java", FilteredLabel = "java"
+                }
+            ]));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("languages", "go"));
+    }
+
+    [Fact]
+    public async Task AddNodesAsync_Empty_ReturnsEmpty()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        Assert.Empty(await store.AddNodesAsync([]));
+    }
+
+    [Fact]
+    public async Task AddNodesAsync_ManyNodes_ReturnsIdsInOrder()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        List<TaxoNode> nodes = [.. Enumerable.Range(1, 1200).Select(i =>
+            new TaxoNode
+            {
+                TreeId = "fruits", ParentId = 9, Key = $"b{i:0000}",
+                Label = $"B{i}", FilteredLabel = $"b{i}"
+            })];
+
+        IList<int> ids = await store.AddNodesAsync(nodes);
+
+        Assert.Equal(1200, ids.Count);
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+        Assert.Equal("b0001", (await store.GetNodeAsync(ids[0]))!.Key);
+        Assert.Equal("b1200", (await store.GetNodeAsync(ids[^1]))!.Key);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_EmptyFilteredLabel_UsesLabel()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        int id = await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "languages", ParentId = 1, Key = "go", Label = "Go"
+        });
+
+        Assert.Equal("Go", (await store.GetNodeAsync(id))!.FilteredLabel);
+    }
+
+    [Fact]
+    public async Task AddTreeAsync_MissingId_ThrowsArgument()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddTreeAsync(new TaxoTree { Id = "", Name = "X" }));
+    }
+
+    [Fact]
+    public async Task DeleteTreeAsync_DeletesItsNodes()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await store.DeleteTreeAsync("fruits");
+
+        Assert.Null(await store.GetNodeAsync(7));
+        Assert.NotNull(await store.GetNodeAsync(1));
+    }
+
+    [Fact]
+    public async Task ClearAsync_RestartsNodeIds()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await store.ClearAsync();
+        await store.AddTreeAsync(new TaxoTree { Id = "t", Name = "T" });
+        int id = await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "t", Key = "a", Label = "A", FilteredLabel = "a"
+        });
+
+        Assert.Equal(1, id);
+    }
+    #endregion
 }

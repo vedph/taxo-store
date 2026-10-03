@@ -27,7 +27,7 @@ For tree visualization and navigation purposes, the API can compute and return a
 - **X (sibling position)**: The position of a node among its siblings (1-based), ordered alphabetically by key. The first sibling has X=1, the second X=2, etc.
 - **HasChildren**: A boolean indicating whether the node has any children.
 
-These properties are **computed at runtime** by the API layer, not stored in the database. This design choice avoids the overhead of maintaining these values during tree mutations (inserts, updates, deletes, moves), which would be particularly problematic with concurrent updates. Instead, the values are calculated on-demand when requested.
+These properties are **computed at runtime**, not stored in the database (for any set of nodes, they are got with a single query). This design choice avoids the overhead of maintaining these values during tree mutations (inserts, updates, deletes, moves), which would be particularly problematic with concurrent updates. Instead, the values are calculated on-demand when requested.
 
 - **Single-node endpoints** (`GET /api/taxostore/nodes/{id}` and `GET /api/taxostore/nodes/tree/{treeId}/key/{key}`) always return the positioned model with X, Y, and HasChildren values.
 - **Bulk endpoints** (children, descendants, ancestors, filtered queries) accept an optional `includePosition` query parameter. When set to `true`, X, Y, and HasChildren values are computed and included; otherwise they are omitted for better performance.
@@ -225,20 +225,26 @@ Once integrated, the following endpoints become available:
 - **Tree Endpoints** (via `TaxoTreeController`):
   - `GET /api/taxostore/trees/{id}` - Get a tree by its ID (string key).
   - `GET /api/taxostore/trees` - Get paginated trees with filtering (query params: pageNumber, pageSize, name).
-  - `POST /api/taxostore/trees` - Create or update a tree (body: TreeBindingModel with id, name, note).
+  - `POST /api/taxostore/trees` - Create or update a tree (body: TreeBindingModel with id, name, note). Returns 201 with the tree ID in the body.
   - `DELETE /api/taxostore/trees/{id}` - Delete a tree by its ID (string key).
 
 - **Node Endpoints** (via `TaxoNodeController`):
   - `GET /api/taxostore/nodes/{id}` - Get a node by its numeric ID. Returns `PositionedNodeModel` with X/Y/HasChildren.
   - `GET /api/taxostore/nodes/tree/{treeId}/key/{key}` - Get a node by tree ID (string) and node key (string). Returns `PositionedNodeModel` with X/Y/HasChildren.
-  - `GET /api/taxostore/nodes` - Get paginated nodes with filtering (query params: pageNumber, pageSize, treeId, parentId, key, parentKey, ancestorKey, filteredLabel, flags, flagMatchMode, isLeaf, includePosition).
+  - `GET /api/taxostore/nodes` - Get paginated nodes with filtering (query params: pageNumber, pageSize, treeId, parentId, isRoot, key, parentKey, ancestorKey, filteredLabel, matchDescendants, flags, flagMatchMode, isLeaf, includePosition). Notes:
+    - `pageSize`=0 disables paging and returns all the matching nodes.
+    - `key`, `parentKey`, `filteredLabel` match any part of the corresponding value (case-insensitive; `%` and `_` are matched literally).
+    - `ancestorKey` is the exact key of an ancestor node: only its descendants (at any depth) are matched.
+    - `matchDescendants`: when true with `filteredLabel`, a node matches also when any of its descendants match the label.
+    - `flags` is a set of single-character flags; `flagMatchMode` is `any` (default: at least one flag present), `all` (all flags present), or `none` (no flag present).
   - `GET /api/taxostore/nodes/roots/{treeId}` - Get root nodes of a tree (query params: pageNumber, pageSize, includePosition).
   - `GET /api/taxostore/nodes/{id}/haschildren` - Check if a node has children (returns boolean).
   - `GET /api/taxostore/nodes/{id}/children` - Get child nodes of a parent node (query params: includePosition).
-  - `GET /api/taxostore/nodes/{id}/descendants` - Get all descendant nodes of a node (query params: includePosition).
+  - `GET /api/taxostore/nodes/{id}/descendants` - Get all descendant nodes of a node, in depth-first order with siblings sorted by key (query params: includePosition).
   - `GET /api/taxostore/nodes/{id}/ancestors` - Get all ancestor nodes of a node (query params: includePosition).
-  - `POST /api/taxostore/nodes` - Create or update a node (body: NodeBindingModel with id, parentId, treeId, key, label, filteredLabel, flags, note).
-  - `POST /api/taxostore/nodes/batch` - Bulk create or update nodes (body: array of NodeBindingModel).
+  - `GET /api/taxostore/nodes/{id}/path` - Get the path from the root to a node, with the page number of each step (query params: pageSize).
+  - `POST /api/taxostore/nodes` - Create or update a node (body: NodeBindingModel with id, parentId, treeId, key, label, filteredLabel, flags, note). Returns 201 with the node ID in the body; 400 if the node is invalid (e.g. missing tree or parent, parent in another tree, parent creating a cycle); 409 if its key is already used in the same tree.
+  - `POST /api/taxostore/nodes/batch` - Bulk create or update nodes (body: array of NodeBindingModel), in a single transaction: if any node is invalid, no node is saved.
   - `DELETE /api/taxostore/nodes/{id}` - Delete a node by its numeric ID.
   - `DELETE /api/taxostore/nodes` - Clear all data from the store.
 
