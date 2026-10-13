@@ -77,6 +77,21 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
     public bool MatchDescendants { get; set; }
 
     /// <summary>
+    /// The exact scope of a mapping of the node. When set, only nodes having
+    /// at least one mapping with this scope are matched. When combined with
+    /// <see cref="MappingTarget"/>, both must be matched by the same mapping.
+    /// </summary>
+    public string? MappingScope { get; set; }
+
+    /// <summary>
+    /// The exact target of a mapping of the node. When set, only nodes having
+    /// at least one mapping with this target are matched. This is usually
+    /// combined with <see cref="MappingScope"/>, to find the node(s) mapped
+    /// to a specific entity of an external resource.
+    /// </summary>
+    public string? MappingTarget { get; set; }
+
+    /// <summary>
     /// Returns a string representing this object.
     /// </summary>
     /// <returns>String.</returns>
@@ -110,6 +125,12 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
         if (IsRoot) sb.Append("IsRoot;");
 
         if (MatchDescendants) sb.Append("MatchDescendants;");
+
+        if (!string.IsNullOrEmpty(MappingScope))
+            sb.Append("MappingScope=").Append(MappingScope).Append(';');
+
+        if (!string.IsNullOrEmpty(MappingTarget))
+            sb.Append("MappingTarget=").Append(MappingTarget).Append(';');
 
         return sb.ToString();
     }

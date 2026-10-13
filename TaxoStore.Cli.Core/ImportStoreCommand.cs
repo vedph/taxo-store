@@ -58,7 +58,8 @@ public sealed class ImportStoreCommand : AsyncCommand<ImportStoreSettings>
             Source = connectionString,
             SeedSourceAsText = false,
             SeedTreeSource = settings.TreesPath,
-            SeedNodeSource = settings.NodesPath
+            SeedNodeSource = settings.NodesPath,
+            SeedMappingSource = settings.MappingsPath
         };
 
         ILogger<PgSqlTaxoStore> logger = LogService.CreateLogger<PgSqlTaxoStore>();
@@ -69,6 +70,11 @@ public sealed class ImportStoreCommand : AsyncCommand<ImportStoreSettings>
             settings.TreesPath.EscapeMarkup());
         AnsiConsole.MarkupLine("  nodes:  [grey]{0}[/]",
             settings.NodesPath.EscapeMarkup());
+        if (!string.IsNullOrEmpty(settings.MappingsPath))
+        {
+            AnsiConsole.MarkupLine("  mappings:  [grey]{0}[/]",
+                settings.MappingsPath.EscapeMarkup());
+        }
 
         try
         {

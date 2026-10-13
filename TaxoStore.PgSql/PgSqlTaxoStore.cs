@@ -39,6 +39,20 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         "ELSE (SELECT COUNT(*) FROM node s WHERE s.parent_id = t.parent_id " +
         "AND s.key <= t.key) END";
 
+    // idempotent script bringing a database created by a previous version
+    // up to date with the current schema (see Assets/Schema.pgsql)
+    private const string UPGRADE_SQL =
+        "ALTER TABLE tree ADD COLUMN IF NOT EXISTS " +
+        "flat BOOLEAN NOT NULL DEFAULT FALSE; " +
+        "CREATE TABLE IF NOT EXISTS node_mapping (" +
+        "node_id INT NOT NULL REFERENCES node(id) ON DELETE CASCADE, " +
+        "scope VARCHAR(100) NOT NULL, " +
+        "target VARCHAR(500) NOT NULL, " +
+        "label VARCHAR(500), " +
+        "CONSTRAINT pk_node_mapping PRIMARY KEY (node_id, scope, target)); " +
+        "CREATE INDEX IF NOT EXISTS idx_node_mapping_scope_target " +
+        "ON node_mapping(scope, target);";
+
     private readonly TaxoStoreOptions _options;
     private readonly ILogger _logger;
     private readonly PgSqlDbManager _dbManager;
@@ -183,6 +197,14 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                 _logger.LogInformation(
                     "TaxoStore database {Database} already exists; " +
                     "skipping creation and seeding", dbName);
+
+                // the database might have been created by a previous
+                // version: ensure that its schema is up to date
+                await using NpgsqlConnection connection = await _dataSource
+                    .OpenConnectionAsync().ConfigureAwait(false);
+                await using NpgsqlCommand command =
+                    new(UPGRADE_SQL, connection);
+                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
             else
             {
@@ -212,6 +234,10 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
                     TaxoTreeImporter importer = new(this, _logger);
 
+                    // mappings are optional
+                    bool hasMappingSource =
+                        !string.IsNullOrEmpty(_options.SeedMappingSource);
+
                     if (_options.SeedSourceAsText)
                     {
                         // create readers from direct CSV text
@@ -219,8 +245,10 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                             new(_options.SeedTreeSource!);
                         using StringReader nodeReader =
                             new(_options.SeedNodeSource!);
-                        await importer.ImportAsync(treeReader, nodeReader)
-                            .ConfigureAwait(false);
+                        using StringReader? mappingReader = hasMappingSource
+                            ? new(_options.SeedMappingSource!) : null;
+                        await importer.ImportAsync(treeReader, nodeReader,
+                            mappingReader).ConfigureAwait(false);
                     }
                     else
                     {
@@ -229,8 +257,11 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                             new(_options.SeedTreeSource!, Encoding.UTF8);
                         using StreamReader nodeReader =
                             new(_options.SeedNodeSource!, Encoding.UTF8);
-                        await importer.ImportAsync(treeReader, nodeReader)
-                            .ConfigureAwait(false);
+                        using StreamReader? mappingReader = hasMappingSource
+                            ? new(_options.SeedMappingSource!, Encoding.UTF8)
+                            : null;
+                        await importer.ImportAsync(treeReader, nodeReader,
+                            mappingReader).ConfigureAwait(false);
                     }
                 }
                 else
@@ -405,7 +436,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <returns>Tree or null if not found.</returns>
     public async Task<TaxoTree?> GetTreeAsync(string id)
     {
-        const string sql = "SELECT id, name, note FROM tree WHERE id = @id";
+        const string sql =
+            "SELECT id, name, note, flat FROM tree WHERE id = @id";
 
         await using NpgsqlConnection connection = await OpenConnectionAsync();
         await using NpgsqlCommand command = new(sql, connection);
@@ -421,7 +453,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         {
             Id = reader.GetString(0),
             Name = reader.GetString(1),
-            Note = reader.IsDBNull(2) ? null : reader.GetString(2)
+            Note = reader.IsDBNull(2) ? null : reader.GetString(2),
+            Flat = reader.GetBoolean(3)
         };
     }
 
@@ -430,8 +463,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// </summary>
     /// <param name="tree">The tree to add or update.</param>
     /// <returns>The ID (key) of the tree which was added.</returns>
-    /// <exception cref="ArgumentException">Missing tree ID or name, or
-    /// invalid data.</exception>
+    /// <exception cref="ArgumentException">Missing tree ID or name, invalid
+    /// data, or a tree set as flat while it has non-root nodes.</exception>
     public async Task<string> AddTreeAsync(TaxoTree tree)
     {
         ArgumentNullException.ThrowIfNull(tree);
@@ -442,22 +475,46 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
         // insert or update tree with specified ID
         const string sql =
-            "INSERT INTO tree (id, name, note) " +
-            "VALUES (@id, @name, @note) " +
+            "INSERT INTO tree (id, name, note, flat) " +
+            "VALUES (@id, @name, @note, @flat) " +
             "ON CONFLICT (id) DO UPDATE " +
-            "SET name = EXCLUDED.name, note = EXCLUDED.note " +
+            "SET name = EXCLUDED.name, note = EXCLUDED.note, " +
+            "flat = EXCLUDED.flat " +
             "RETURNING id";
 
+        // a flat tree cannot have non-root nodes
+        const string flatSql =
+            "SELECT EXISTS(SELECT 1 FROM node " +
+            "WHERE tree_id = @id AND parent_id IS NOT NULL)";
+
         await using NpgsqlConnection connection = await OpenConnectionAsync();
-        await using NpgsqlCommand command = new(sql, connection);
+        await using NpgsqlTransaction transaction =
+            await connection.BeginTransactionAsync();
+        await using NpgsqlCommand command = new(sql, connection, transaction);
         command.Parameters.AddWithValue("id", tree.Id);
         command.Parameters.AddWithValue("name", tree.Name);
         command.Parameters.AddWithValue("note",
             (object?)tree.Note ?? DBNull.Value);
+        command.Parameters.AddWithValue("flat", tree.Flat);
 
         try
         {
             object? result = await command.ExecuteScalarAsync();
+
+            if (tree.Flat)
+            {
+                await using NpgsqlCommand flatCommand =
+                    new(flatSql, connection, transaction);
+                flatCommand.Parameters.AddWithValue("id", tree.Id);
+                if (await flatCommand.ExecuteScalarAsync() is true)
+                {
+                    throw new ArgumentException(
+                        $"Tree {tree.Id} cannot be flat because it has " +
+                        "non-root nodes", nameof(tree));
+                }
+            }
+
+            await transaction.CommitAsync();
             return result?.ToString() ?? tree.Id;
         }
         catch (PostgresException ex) when (TranslateWriteException(ex)
@@ -507,7 +564,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
         await using NpgsqlConnection connection = await OpenConnectionAsync();
         return await ReadPageAsync(connection,
-            $"SELECT id, name, note, COUNT(*) OVER() FROM tree{where} " +
+            $"SELECT id, name, note, flat, COUNT(*) OVER() FROM tree{where} " +
             "ORDER BY name, id",
             $"SELECT COUNT(*) FROM tree{where}",
             parameters, filter, ReadTree);
@@ -530,12 +587,57 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         };
     }
 
+    /// <summary>
+    /// Loads the mappings of the specified nodes with a single query,
+    /// setting the <see cref="TaxoNode.Mappings"/> of each node (to an empty
+    /// list when it has no mappings). Mappings are sorted by scope and target.
+    /// </summary>
+    private static async Task LoadMappingsAsync(NpgsqlConnection connection,
+        IEnumerable<TaxoNode> nodes)
+    {
+        Dictionary<int, IList<TaxoNodeMapping>> mappings = [];
+        foreach (TaxoNode node in nodes)
+        {
+            // the same node might occur more than once
+            if (!mappings.TryGetValue(node.Id,
+                out IList<TaxoNodeMapping>? list))
+            {
+                mappings[node.Id] = list = [];
+            }
+            node.Mappings = list;
+        }
+        if (mappings.Count == 0) return;
+
+        await using NpgsqlCommand command = new(
+            "SELECT node_id, scope, target, label FROM node_mapping " +
+            "WHERE node_id = ANY(@ids) ORDER BY node_id, scope, target",
+            connection);
+        command.Parameters.AddWithValue("ids", mappings.Keys.ToArray());
+
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            mappings[reader.GetInt32(0)].Add(new TaxoNodeMapping
+            {
+                Scope = reader.GetString(1),
+                Target = reader.GetString(2),
+                Label = reader.IsDBNull(3) ? null : reader.GetString(3)
+            });
+        }
+    }
+
     private static async Task<List<TaxoNode>> ReadNodesAsync(
-        NpgsqlCommand command)
+        NpgsqlCommand command, bool includeMappings)
     {
         List<TaxoNode> nodes = [];
-        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync()) nodes.Add(ReadNode(reader));
+        await using (NpgsqlDataReader reader =
+            await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync()) nodes.Add(ReadNode(reader));
+        }
+
+        if (includeMappings)
+            await LoadMappingsAsync(command.Connection!, nodes);
         return nodes;
     }
 
@@ -545,10 +647,12 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <param name="treeId">The ID (key) of the tree.</param>
     /// <param name="options">Paging options. If <see cref="PagingOptions.PageSize"/>
     /// is 0, all root nodes are returned without paging.</param>
+    /// <param name="includeMappings">True to also fetch the mappings of the
+    /// retrieved nodes.</param>
     /// <returns>A page of root nodes. When page size is 0, the page contains
     /// all root nodes.</returns>
     public Task<DataPage<TaxoNode>> GetRootNodes(string treeId,
-        PagingOptions options)
+        PagingOptions options, bool includeMappings = false)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -558,22 +662,25 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
             PageSize = options.PageSize,
             TreeId = treeId,
             IsRoot = true
-        });
+        }, includeMappings);
     }
 
     /// <summary>
     /// Retrieves the node with the specified identifier.
     /// </summary>
     /// <param name="id">The ID of the node to retrieve.</param>
+    /// <param name="includeMappings">True to also fetch the mappings of the
+    /// retrieved node.</param>
     /// <returns>The node or null if not found.</returns>
-    public async Task<TaxoNode?> GetNodeAsync(int id)
+    public async Task<TaxoNode?> GetNodeAsync(int id,
+        bool includeMappings = false)
     {
         await using NpgsqlConnection connection = await OpenConnectionAsync();
         await using NpgsqlCommand command = new(
             $"SELECT {NODE_COLUMNS} FROM node n WHERE n.id = @id", connection);
         command.Parameters.AddWithValue("id", id);
 
-        List<TaxoNode> nodes = await ReadNodesAsync(command);
+        List<TaxoNode> nodes = await ReadNodesAsync(command, includeMappings);
         return nodes.Count > 0 ? nodes[0] : null;
     }
 
@@ -582,10 +689,13 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// </summary>
     /// <param name="treeId">The ID (key) of the tree to search.</param>
     /// <param name="key">The key of the node to retrieve.</param>
+    /// <param name="includeMappings">True to also fetch the mappings of the
+    /// retrieved node.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains the node associated with the specified key, or null
     /// if no such node exists.</returns>
-    public async Task<TaxoNode?> GetNodeFromKeyAsync(string treeId, string key)
+    public async Task<TaxoNode?> GetNodeFromKeyAsync(string treeId, string key,
+        bool includeMappings = false)
     {
         await using NpgsqlConnection connection = await OpenConnectionAsync();
         await using NpgsqlCommand command = new(
@@ -594,7 +704,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         command.Parameters.AddWithValue("treeId", treeId);
         command.Parameters.AddWithValue("key", key);
 
-        List<TaxoNode> nodes = await ReadNodesAsync(command);
+        List<TaxoNode> nodes = await ReadNodesAsync(command, includeMappings);
         return nodes.Count > 0 ? nodes[0] : null;
     }
 
@@ -715,6 +825,27 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                 "EXISTS (SELECT 1 FROM node c WHERE c.parent_id = n.id)");
         }
 
+        // mapping scope and/or target (exact), matched by the same mapping
+        bool hasScope = !string.IsNullOrEmpty(filter.MappingScope);
+        bool hasTarget = !string.IsNullOrEmpty(filter.MappingTarget);
+        if (hasScope || hasTarget)
+        {
+            where.Add("EXISTS (SELECT 1 FROM node_mapping m " +
+                "WHERE m.node_id = n.id" +
+                (hasScope ? " AND m.scope = @mappingScope" : "") +
+                (hasTarget ? " AND m.target = @mappingTarget" : "") + ")");
+            if (hasScope)
+            {
+                parameters.Add(new NpgsqlParameter("mappingScope",
+                    filter.MappingScope));
+            }
+            if (hasTarget)
+            {
+                parameters.Add(new NpgsqlParameter("mappingTarget",
+                    filter.MappingTarget));
+            }
+        }
+
         if (where.Count > 0)
             from.Append(" WHERE ").Append(string.Join(" AND ", where));
 
@@ -731,8 +862,11 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// </summary>
     /// <param name="filter">The filter criteria. When page size is 0,
     /// all the matching nodes are returned.</param>
+    /// <param name="includeMappings">True to also fetch the mappings of the
+    /// retrieved nodes.</param>
     /// <returns>A page of nodes.</returns>
-    public async Task<DataPage<TaxoNode>> GetNodesAsync(TaxoNodeFilter filter)
+    public async Task<DataPage<TaxoNode>> GetNodesAsync(TaxoNodeFilter filter,
+        bool includeMappings = false)
     {
         ArgumentNullException.ThrowIfNull(filter);
 
@@ -740,11 +874,14 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
             BuildNodeQuery(filter);
 
         await using NpgsqlConnection connection = await OpenConnectionAsync();
-        return await ReadPageAsync(connection,
+        DataPage<TaxoNode> page = await ReadPageAsync(connection,
             $"{ctes}SELECT {NODE_COLUMNS}, COUNT(*) OVER(){body} " +
             "ORDER BY n.key, n.id",
             $"{ctes}SELECT COUNT(*){body}",
             parameters, filter, ReadNode);
+
+        if (includeMappings) await LoadMappingsAsync(connection, page.Items);
+        return page;
     }
 
     /// <summary>
@@ -770,8 +907,11 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// Retrieves the collection of child nodes for the specified parent node.
     /// </summary>
     /// <param name="parentId">The identifier of the parent node.</param>
+    /// <param name="includeMappings">True to also fetch the mappings of the
+    /// retrieved nodes.</param>
     /// <returns>A list of child nodes, sorted by their key.</returns>
-    public async Task<IList<TaxoNode>> GetChildNodesAsync(int parentId)
+    public async Task<IList<TaxoNode>> GetChildNodesAsync(int parentId,
+        bool includeMappings = false)
     {
         await using NpgsqlConnection connection = await OpenConnectionAsync();
         await using NpgsqlCommand command = new(
@@ -779,7 +919,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
             "WHERE n.parent_id = @parentId ORDER BY n.key, n.id", connection);
         command.Parameters.AddWithValue("parentId", parentId);
 
-        return await ReadNodesAsync(command);
+        return await ReadNodesAsync(command, includeMappings);
     }
 
     /// <summary>
@@ -787,9 +927,12 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// a recursive query.
     /// </summary>
     /// <param name="parentId">The identifier of the parent node.</param>
+    /// <param name="includeMappings">True to also fetch the mappings of the
+    /// retrieved nodes.</param>
     /// <returns>A list of descendant nodes in depth-first (pre-order)
     /// traversal order, with siblings sorted by key.</returns>
-    public async Task<IList<TaxoNode>> GetDescendantNodesAsync(int parentId)
+    public async Task<IList<TaxoNode>> GetDescendantNodesAsync(int parentId,
+        bool includeMappings = false)
     {
         // the sort path is the array of keys from the first descendant level
         // down to each node: sorting by it yields a pre-order traversal
@@ -810,7 +953,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         await using NpgsqlCommand command = new(sql, connection);
         command.Parameters.AddWithValue("parentId", parentId);
 
-        return await ReadNodesAsync(command);
+        return await ReadNodesAsync(command, includeMappings);
     }
 
     /// <summary>
@@ -818,8 +961,11 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// immediate parent up to the root.
     /// </summary>
     /// <param name="nodeId">The identifier of the node.</param>
+    /// <param name="includeMappings">True to also fetch the mappings of the
+    /// retrieved nodes.</param>
     /// <returns>A list of ancestor nodes.</returns>
-    public async Task<IList<TaxoNode>> GetAncestorNodesAsync(int nodeId)
+    public async Task<IList<TaxoNode>> GetAncestorNodesAsync(int nodeId,
+        bool includeMappings = false)
     {
         const string sql =
             "WITH RECURSIVE a AS (" +
@@ -837,7 +983,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         await using NpgsqlCommand command = new(sql, connection);
         command.Parameters.AddWithValue("nodeId", nodeId);
 
-        return await ReadNodesAsync(command);
+        return await ReadNodesAsync(command, includeMappings);
     }
 
     /// <summary>
@@ -950,6 +1096,96 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
             throw new ArgumentException($"Node {node} has no label");
         if (node.ParentId.HasValue && node.ParentId == node.Id)
             throw new ArgumentException($"Node {node} cannot be its own parent");
+
+        if (node.Mappings == null) return;
+
+        HashSet<(string, string)> mappingKeys = [];
+        foreach (TaxoNodeMapping mapping in node.Mappings)
+        {
+            if (mapping == null)
+                throw new ArgumentException($"Node {node} has a null mapping");
+            if (string.IsNullOrWhiteSpace(mapping.Scope))
+            {
+                throw new ArgumentException(
+                    $"Node {node} has a mapping without scope");
+            }
+            if (string.IsNullOrWhiteSpace(mapping.Target))
+            {
+                throw new ArgumentException(
+                    $"Node {node} has a mapping without target");
+            }
+            if (!mappingKeys.Add((mapping.Scope, mapping.Target)))
+            {
+                throw new ArgumentException(
+                    $"Node {node} has a duplicate mapping {mapping.Scope}:" +
+                    mapping.Target);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Replaces the mappings of each of the specified (just written) nodes
+    /// having non-null mappings with those mappings. The mappings of nodes
+    /// having null mappings are left untouched.
+    /// </summary>
+    /// <param name="connection">The connection.</param>
+    /// <param name="transaction">The transaction.</param>
+    /// <param name="nodes">The nodes.</param>
+    /// <param name="ids">The ID of each node in <paramref name="nodes"/>.
+    /// </param>
+    private static async Task SaveMappingsAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction,
+        List<TaxoNode> nodes, List<int> ids)
+    {
+        // when the same node occurs more than once, the last one wins
+        Dictionary<int, IList<TaxoNodeMapping>> mappings = [];
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            if (nodes[i].Mappings != null) mappings[ids[i]] = nodes[i].Mappings!;
+        }
+        if (mappings.Count == 0) return;
+
+        await using (NpgsqlCommand command = new(
+            "DELETE FROM node_mapping WHERE node_id = ANY(@ids)",
+            connection, transaction))
+        {
+            command.Parameters.AddWithValue("ids", mappings.Keys.ToArray());
+            await command.ExecuteNonQueryAsync();
+        }
+
+        List<int> nodeIds = [];
+        List<string> scopes = [];
+        List<string> targets = [];
+        List<string?> labels = [];
+        foreach (KeyValuePair<int, IList<TaxoNodeMapping>> p in mappings)
+        {
+            foreach (TaxoNodeMapping mapping in p.Value)
+            {
+                nodeIds.Add(p.Key);
+                scopes.Add(mapping.Scope);
+                targets.Add(mapping.Target);
+                labels.Add(string.IsNullOrEmpty(mapping.Label)
+                    ? null : mapping.Label);
+            }
+        }
+        if (nodeIds.Count == 0) return;
+
+        // insert all the mappings with a single command
+        await using NpgsqlCommand insert = new(
+            "INSERT INTO node_mapping (node_id, scope, target, label) " +
+            "SELECT * FROM unnest(@nodeIds, @scopes, @targets, @labels)",
+            connection, transaction);
+        insert.Parameters.AddWithValue("nodeIds", nodeIds.ToArray());
+        insert.Parameters.Add(new NpgsqlParameter("scopes",
+            NpgsqlDbType.Array | NpgsqlDbType.Varchar)
+            { Value = scopes.ToArray() });
+        insert.Parameters.Add(new NpgsqlParameter("targets",
+            NpgsqlDbType.Array | NpgsqlDbType.Varchar)
+            { Value = targets.ToArray() });
+        insert.Parameters.Add(new NpgsqlParameter("labels",
+            NpgsqlDbType.Array | NpgsqlDbType.Varchar)
+            { Value = labels.ToArray() });
+        await insert.ExecuteNonQueryAsync();
     }
 
     private static NpgsqlBatchCommand CreateUpsertCommand(TaxoNode node)
@@ -1008,8 +1244,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
     /// <summary>
     /// Validates the hierarchy of the specified (just written) nodes: each
-    /// node must belong to the same tree of its parent and children, and
-    /// must not be its own ancestor.
+    /// node must belong to the same tree of its parent and children, must
+    /// not be its own ancestor, and must have no parent in a flat tree.
     /// </summary>
     /// <exception cref="ArgumentException">Invalid hierarchy.</exception>
     private static async Task ValidateHierarchyAsync(
@@ -1032,6 +1268,22 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                 throw new ArgumentException(
                     $"Node {id} belongs to a tree different from its " +
                     "parent or children");
+            }
+        }
+
+        const string flatSql =
+            "SELECT n.id FROM node n JOIN tree t ON t.id = n.tree_id " +
+            "WHERE n.id = ANY(@ids) AND n.parent_id IS NOT NULL AND t.flat " +
+            "LIMIT 1";
+
+        await using (NpgsqlCommand command =
+            new(flatSql, connection, transaction))
+        {
+            command.Parameters.AddWithValue("ids", ids.ToArray());
+            if (await command.ExecuteScalarAsync() is int id)
+            {
+                throw new ArgumentException(
+                    $"Node {id} cannot have a parent because its tree is flat");
             }
         }
 
@@ -1060,6 +1312,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <summary>
     /// Adds a new node (when its ID is 0) or updates an existing one (when
     /// its ID is greater than 0; if not found, it is added with that ID).
+    /// When the node's mappings are not null, they replace all the mappings
+    /// of that node; when null, its mappings are left untouched.
     /// </summary>
     /// <param name="node">The node to add.</param>
     /// <returns>The ID of the added or updated node.</returns>
@@ -1117,6 +1371,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
             await ValidateHierarchyAsync(connection, transaction, ids);
 
+            await SaveMappingsAsync(connection, transaction, list, ids);
+
             await transaction.CommitAsync();
             return ids;
         }
@@ -1155,7 +1411,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     {
         await using NpgsqlConnection connection = await OpenConnectionAsync();
         await using NpgsqlCommand command = new(
-            "TRUNCATE TABLE node, tree RESTART IDENTITY;", connection);
+            "TRUNCATE TABLE node_mapping, node, tree RESTART IDENTITY;",
+            connection);
         await command.ExecuteNonQueryAsync();
     }
     #endregion

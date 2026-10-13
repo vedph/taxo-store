@@ -1356,4 +1356,479 @@ fruits,Common Fruits,Common fruits classification
         Assert.Equal(1, id);
     }
     #endregion
+
+    #region Flat Tree Tests
+    [Fact]
+    public async Task AddTreeAsync_Flat_IsSavedAndRetrieved()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await store.AddTreeAsync(new TaxoTree
+        {
+            Id = "colors", Name = "Colors", Flat = true
+        });
+
+        Assert.True((await store.GetTreeAsync("colors"))!.Flat);
+        Assert.False((await store.GetTreeAsync("languages"))!.Flat);
+
+        DataPage<TaxoTree> page = await store.GetTreesAsync(
+            new TaxoTreeFilter { PageSize = 0 });
+        Assert.Equal(["colors"],
+            page.Items.Where(t => t.Flat).Select(t => t.Id));
+    }
+
+    [Fact]
+    public async Task AddTreeAsync_FlatWithNonRootNodes_ThrowsArgumentAndRollsBack()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddTreeAsync(new TaxoTree
+            {
+                Id = "languages", Name = "Renamed", Flat = true
+            }));
+
+        TaxoTree tree = (await store.GetTreeAsync("languages"))!;
+        Assert.False(tree.Flat);
+        Assert.Equal("Programming Languages", tree.Name);
+    }
+
+    [Fact]
+    public async Task AddTreeAsync_FlatWithRootNodesOnly_Succeeds()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        await store.AddTreeAsync(new TaxoTree { Id = "colors", Name = "Colors" });
+        await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "colors", Key = "red", Label = "Red"
+        });
+
+        await store.AddTreeAsync(new TaxoTree
+        {
+            Id = "colors", Name = "Colors", Flat = true
+        });
+
+        Assert.True((await store.GetTreeAsync("colors"))!.Flat);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_ParentInFlatTree_ThrowsArgumentAndRollsBack()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        await store.AddTreeAsync(new TaxoTree
+        {
+            Id = "colors", Name = "Colors", Flat = true
+        });
+        int redId = await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "colors", Key = "red", Label = "Red"
+        });
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(new TaxoNode
+            {
+                TreeId = "colors", ParentId = redId, Key = "crimson",
+                Label = "Crimson"
+            }));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("colors", "crimson"));
+    }
+    #endregion
+
+    #region Mapping Tests
+    private static TaxoNode CreateMappedNode(string key = "go") => new()
+    {
+        TreeId = "languages", ParentId = 1, Key = key, Label = key,
+        Mappings =
+        [
+            new TaxoNodeMapping
+            {
+                Scope = "wikidata", Target = "Q37227", Label = "Go"
+            },
+            new TaxoNodeMapping { Scope = "viaf", Target = "123" }
+        ]
+    };
+
+    [Fact]
+    public async Task AddNodeAsync_WithMappings_SavesMappings()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        int id = await store.AddNodeAsync(CreateMappedNode());
+
+        // not requested: null
+        Assert.Null((await store.GetNodeAsync(id))!.Mappings);
+
+        // requested: sorted by scope and target
+        TaxoNode node = (await store.GetNodeAsync(id, true))!;
+        Assert.NotNull(node.Mappings);
+        Assert.Equal(2, node.Mappings.Count);
+        Assert.Equal("viaf", node.Mappings[0].Scope);
+        Assert.Equal("123", node.Mappings[0].Target);
+        Assert.Null(node.Mappings[0].Label);
+        Assert.Equal("wikidata", node.Mappings[1].Scope);
+        Assert.Equal("Q37227", node.Mappings[1].Target);
+        Assert.Equal("Go", node.Mappings[1].Label);
+    }
+
+    [Fact]
+    public async Task GetNodeAsync_IncludeMappingsWithoutMappings_ReturnsEmpty()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        TaxoNode node = (await store.GetNodeAsync(5, true))!;
+
+        Assert.NotNull(node.Mappings);
+        Assert.Empty(node.Mappings);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_NullMappings_KeepsMappings()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateMappedNode());
+
+        // update the node as read without its mappings
+        TaxoNode node = (await store.GetNodeAsync(id))!;
+        node.Label = "Go!";
+        await store.AddNodeAsync(node);
+
+        node = (await store.GetNodeAsync(id, true))!;
+        Assert.Equal("Go!", node.Label);
+        Assert.Equal(2, node.Mappings!.Count);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_EmptyMappings_RemovesMappings()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateMappedNode());
+
+        TaxoNode node = (await store.GetNodeAsync(id))!;
+        node.Mappings = [];
+        await store.AddNodeAsync(node);
+
+        Assert.Empty((await store.GetNodeAsync(id, true))!.Mappings!);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_NewMappings_ReplaceOldOnes()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateMappedNode());
+
+        TaxoNode node = (await store.GetNodeAsync(id, true))!;
+        node.Mappings =
+        [
+            new TaxoNodeMapping { Scope = "viaf", Target = "123", Label = "x" },
+            new TaxoNodeMapping { Scope = "getty", Target = "300" }
+        ];
+        await store.AddNodeAsync(node);
+
+        IList<TaxoNodeMapping> mappings =
+            (await store.GetNodeAsync(id, true))!.Mappings!;
+        Assert.Equal(["getty:300", "viaf:123"],
+            mappings.Select(m => $"{m.Scope}:{m.Target}"));
+        Assert.Equal("x", mappings[1].Label);
+    }
+
+    [Theory]
+    [InlineData("viaf", "1", "viaf", "1")]
+    [InlineData("", "1", "viaf", "2")]
+    [InlineData("viaf", " ", "viaf", "2")]
+    public async Task AddNodeAsync_InvalidMappings_ThrowsArgumentAndRollsBack(
+        string scope1, string target1, string scope2, string target2)
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = CreateMappedNode();
+        node.Mappings =
+        [
+            new TaxoNodeMapping { Scope = scope1, Target = target1 },
+            new TaxoNodeMapping { Scope = scope2, Target = target2 }
+        ];
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(node));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("languages", "go"));
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_TooLongMappingScope_ThrowsArgument()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = CreateMappedNode();
+        node.Mappings![0].Scope = new string('x', 101);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(node));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("languages", "go"));
+    }
+
+    [Fact]
+    public async Task AddNodesAsync_SameTargetOnDifferentNodes_Succeeds()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        IList<int> ids = await store.AddNodesAsync(
+            [CreateMappedNode("go"), CreateMappedNode("rust")]);
+
+        Assert.All(ids, id => Assert.Equal(2,
+            store.GetNodeAsync(id, true).Result!.Mappings!.Count));
+    }
+
+    [Fact]
+    public async Task NodeLists_IncludeMappings_ReturnMappings()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateMappedNode());
+        int childId = await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "languages", ParentId = id, Key = "tinygo",
+            Label = "TinyGo"
+        });
+
+        // page
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            new TaxoNodeFilter { TreeId = "languages", ParentId = 1 }, true);
+        Assert.Equal([0, 2, 0],
+            page.Items.Select(n => n.Mappings!.Count));
+        Assert.All((await store.GetNodesAsync(
+            new TaxoNodeFilter { TreeId = "languages" })).Items,
+            n => Assert.Null(n.Mappings));
+
+        // roots
+        Assert.All((await store.GetRootNodes("languages",
+            new PagingOptions { PageSize = 0 }, true)).Items,
+            n => Assert.Empty(n.Mappings!));
+
+        // children
+        Assert.Equal(2, (await store.GetChildNodesAsync(1, true))
+            .Single(n => n.Id == id).Mappings!.Count);
+        Assert.All(await store.GetChildNodesAsync(1),
+            n => Assert.Null(n.Mappings));
+
+        // descendants
+        Assert.Equal(2, (await store.GetDescendantNodesAsync(1, true))
+            .Single(n => n.Id == id).Mappings!.Count);
+
+        // ancestors
+        Assert.Equal([2, 0], (await store.GetAncestorNodesAsync(childId, true))
+            .Select(n => n.Mappings!.Count));
+
+        // by key
+        Assert.Equal(2, (await store.GetNodeFromKeyAsync(
+            "languages", "go", true))!.Mappings!.Count);
+        Assert.Null((await store.GetNodeFromKeyAsync(
+            "languages", "go"))!.Mappings);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_MappingFilters_ReturnMappedNodes()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await store.AddNodeAsync(CreateMappedNode());
+        TaxoNode java = (await store.GetNodeAsync(5))!;
+        java.Mappings = [new TaxoNodeMapping { Scope = "viaf", Target = "456" }];
+        await store.AddNodeAsync(java);
+
+        async Task<IEnumerable<string>> GetKeys(string? scope, string? target)
+        {
+            return (await store.GetNodesAsync(new TaxoNodeFilter
+            {
+                PageSize = 0, MappingScope = scope, MappingTarget = target
+            })).Items.Select(n => n.Key);
+        }
+
+        Assert.Equal(["go", "java"], await GetKeys("viaf", null));
+        Assert.Equal(["java"], await GetKeys("viaf", "456"));
+        Assert.Equal(["go"], await GetKeys(null, "Q37227"));
+        // scope and target must be matched by the same mapping
+        Assert.Empty(await GetKeys("wikidata", "123"));
+        Assert.Empty(await GetKeys("VIAF", null));
+    }
+
+    [Fact]
+    public async Task DeleteNodeAsync_DeletesItsMappings()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateMappedNode());
+
+        await store.DeleteNodeAsync(id);
+
+        // a new node with the same ID gets no mappings
+        await store.AddNodeAsync(new TaxoNode
+        {
+            Id = id, TreeId = "languages", ParentId = 1, Key = "go",
+            Label = "Go"
+        });
+        Assert.Empty((await store.GetNodeAsync(id, true))!.Mappings!);
+    }
+
+    [Fact]
+    public async Task ClearAsync_RemovesMappings()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await store.AddNodeAsync(CreateMappedNode());
+
+        await store.ClearAsync();
+
+        Assert.Equal(0, (await store.GetNodesAsync(new TaxoNodeFilter
+        {
+            MappingScope = "viaf"
+        })).Total);
+    }
+    #endregion
+
+    #region Import Tests
+    private const string FLAT_TREES_CSV = @"id,name,note,flat
+languages,Programming Languages,,
+colors,Colors,A list,true
+";
+
+    private const string FLAT_NODES_CSV =
+        @"tree_n,parent_key,key,label,filtered_label,flags
+1,,prog,Programming,programming,
+1,prog,oop,Object-Oriented,object oriented,
+2,,red,Red,red,
+2,,green,Green,green,
+";
+
+    private const string MAPPINGS_CSV = @"tree_n,node_key,scope,target,label
+1,oop,wikidata,Q79872,object-oriented programming
+1,oop,viaf,123,
+2,red,getty,300126225,red (color)
+";
+
+    [Fact]
+    public async Task ImportAsync_FlatAndMappings_ImportsThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        int count = await importer.ImportAsync(
+            new StringReader(FLAT_TREES_CSV),
+            new StringReader(FLAT_NODES_CSV),
+            new StringReader(MAPPINGS_CSV));
+
+        Assert.Equal(4, count);
+        Assert.False((await store.GetTreeAsync("languages"))!.Flat);
+        Assert.True((await store.GetTreeAsync("colors"))!.Flat);
+
+        // mappings survive the second pass, which sets the parents
+        TaxoNode oop = (await store.GetNodeFromKeyAsync(
+            "languages", "oop", true))!;
+        Assert.NotNull(oop.ParentId);
+        Assert.Equal(["viaf:123", "wikidata:Q79872"],
+            oop.Mappings!.Select(m => $"{m.Scope}:{m.Target}"));
+        Assert.Null(oop.Mappings![0].Label);
+        Assert.Equal("object-oriented programming", oop.Mappings[1].Label);
+
+        Assert.Equal("300126225", Assert.Single((await store
+            .GetNodeFromKeyAsync("colors", "red", true))!.Mappings!).Target);
+        Assert.Empty((await store.GetNodeFromKeyAsync(
+            "colors", "green", true))!.Mappings!);
+    }
+
+    [Fact]
+    public async Task ImportAsync_ParentInFlatTree_Throws()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            importer.ImportAsync(
+                new StringReader(FLAT_TREES_CSV),
+                new StringReader(FLAT_NODES_CSV + "2,red,crimson,Crimson,,\n")));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("colors", "red"));
+    }
+
+    [Fact]
+    public async Task ImportAsync_MappingForUnknownNode_Throws()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            importer.ImportAsync(
+                new StringReader(FLAT_TREES_CSV),
+                new StringReader(FLAT_NODES_CSV),
+                new StringReader(MAPPINGS_CSV + "2,blue,viaf,1,\n")));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("colors", "red"));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_SeedMappingSource_SeedsMappings()
+    {
+        // create the store just to reset the database, then drop it
+        CreateStoreAsync(true).Dispose();
+        NpgsqlConnection.ClearAllPools();
+        _dbManager.RemoveDatabase(DB_NAME);
+
+        using PgSqlTaxoStore store = new(new TaxoStoreOptions
+        {
+            Source = string.Format(CS_TEMPLATE, DB_NAME),
+            SeedSourceAsText = true,
+            SeedTreeSource = FLAT_TREES_CSV,
+            SeedNodeSource = FLAT_NODES_CSV,
+            SeedMappingSource = MAPPINGS_CSV
+        });
+        await store.InitializeAsync();
+
+        Assert.True((await store.GetTreeAsync("colors"))!.Flat);
+        Assert.Equal(2, (await store.GetNodeFromKeyAsync(
+            "languages", "oop", true))!.Mappings!.Count);
+    }
+    #endregion
+
+    #region Upgrade Tests
+    [Fact]
+    public async Task InitializeAsync_PreviousSchema_IsUpgradedKeepingData()
+    {
+        string connectionString = string.Format(CS_TEMPLATE, DB_NAME);
+
+        // downgrade a seeded database to the schema of previous versions
+        using (PgSqlTaxoStore old = CreateStoreAsync(false))
+        {
+            await using NpgsqlConnection connection = new(connectionString);
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using NpgsqlCommand command = new(
+                "DROP TABLE node_mapping; ALTER TABLE tree DROP COLUMN flat;",
+                connection);
+            await command.ExecuteNonQueryAsync(
+                TestContext.Current.CancellationToken);
+        }
+        NpgsqlConnection.ClearAllPools();
+
+        using PgSqlTaxoStore store = new(new TaxoStoreOptions
+        {
+            Source = connectionString
+        });
+        await store.InitializeAsync();
+
+        // existing data is kept
+        Assert.False((await store.GetTreeAsync("languages"))!.Flat);
+        Assert.Equal("java", (await store.GetNodeAsync(5))!.Key);
+
+        // new features work
+        await store.AddTreeAsync(new TaxoTree
+        {
+            Id = "colors", Name = "Colors", Flat = true
+        });
+        Assert.True((await store.GetTreeAsync("colors"))!.Flat);
+        int id = await store.AddNodeAsync(CreateMappedNode());
+        Assert.Equal(2, (await store.GetNodeAsync(id, true))!.Mappings!.Count);
+
+        // upgrading again is harmless
+        using PgSqlTaxoStore again = new(new TaxoStoreOptions
+        {
+            Source = connectionString
+        });
+        await again.InitializeAsync();
+        Assert.Equal(2, (await again.GetNodeAsync(id, true))!.Mappings!.Count);
+    }
+    #endregion
 }

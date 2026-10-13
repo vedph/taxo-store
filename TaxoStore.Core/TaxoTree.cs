@@ -22,6 +22,12 @@ public class TaxoTree
     public string? Note {  get; set; }
 
     /// <summary>
+    /// True if this tree is flat, i.e. it is just a list: all its nodes are
+    /// root nodes. Nodes in a flat tree cannot have a parent.
+    /// </summary>
+    public bool Flat { get; set; }
+
+    /// <summary>
     /// Returns a string representing this object.
     /// </summary>
     /// <returns>String.</returns>

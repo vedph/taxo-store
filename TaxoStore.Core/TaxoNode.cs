@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Collections.Generic;
+using System.Text;
 
 namespace TaxoStore.Core;
 
@@ -53,6 +54,16 @@ public class TaxoNode
     /// An optional note attached to this node.
     /// </summary>
     public string? Note { get; set; }
+
+    /// <summary>
+    /// The mappings of this node to equivalent entities in external
+    /// resources. When reading nodes, this is null unless mappings were
+    /// explicitly requested; in that case, it is empty when the node has no
+    /// mappings. When writing a node, null means that the node's mappings
+    /// in the store are left untouched, while a non-null value (even when
+    /// empty) replaces all of them.
+    /// </summary>
+    public IList<TaxoNodeMapping>? Mappings { get; set; }
 
     /// <summary>
     /// Returns a string representing this node.

@@ -41,6 +41,7 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
             FilteredLabel = node.FilteredLabel,
             Flags = node.Flags,
             Note = node.Note,
+            Mappings = node.Mappings,
             Y = position?.Y ?? 1,
             X = position?.X ?? 1,
             HasChildren = position?.HasChildren ?? false
@@ -74,6 +75,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// Retrieves the node with the specified identifier.
     /// </summary>
     /// <param name="id">The unique identifier of the node to retrieve.</param>
+    /// <param name="includeMappings">If true, include the node's mappings
+    /// in the response. Default is false.</param>
     /// <returns>An <see cref="OkObjectResult"/> containing the node with
     /// computed position (X/Y) if found; otherwise, a <see cref="NotFoundResult"/>
     /// if no node with the specified identifier exists.</returns>
@@ -81,9 +84,10 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     [Produces("application/json")]
     [ProducesResponseType(200)]
     [ProducesResponseType(404)]
-    public async Task<IActionResult> GetNodeAsync([FromRoute] int id)
+    public async Task<IActionResult> GetNodeAsync([FromRoute] int id,
+        [FromQuery] bool includeMappings = false)
     {
-        TaxoNode? node = await _store.GetNodeAsync(id);
+        TaxoNode? node = await _store.GetNodeAsync(id, includeMappings);
         if (node is null) return NotFound();
 
         PositionedTaxoNodeModel model = await ToPositionedModelAsync(node);
@@ -95,6 +99,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// </summary>
     /// <param name="treeId">The unique identifier of the tree containing the node.</param>
     /// <param name="key">The key of the node to retrieve within the specified tree.</param>
+    /// <param name="includeMappings">If true, include the node's mappings
+    /// in the response. Default is false.</param>
     /// <returns>An <see cref="OkObjectResult"/> containing the node with
     /// computed position (X/Y) if found; otherwise, a <see cref="NotFoundResult"/>
     /// if no node with the specified tree identifier and key exists.</returns>
@@ -104,9 +110,11 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     [ProducesResponseType(404)]
     public async Task<IActionResult> GetNodeFromKeyAsync(
         [FromRoute] string treeId,
-        [FromRoute] string key)
+        [FromRoute] string key,
+        [FromQuery] bool includeMappings = false)
     {
-        TaxoNode? node = await _store.GetNodeFromKeyAsync(treeId, key);
+        TaxoNode? node = await _store.GetNodeFromKeyAsync(treeId, key,
+            includeMappings);
         if (node is null) return NotFound();
 
         PositionedTaxoNodeModel model = await ToPositionedModelAsync(node);
@@ -119,7 +127,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// </summary>
     /// <param name="model">The filter parameters to apply to the node query.
     /// The filter is provided as query string values. Set IncludePosition=true
-    /// to include X/Y position data in the response.</param>
+    /// to include X/Y position data in the response, and IncludeMappings=true
+    /// to include the mappings of each node.</param>
     /// <returns>An <see cref="IActionResult"/> containing a JSON-formatted
     /// paginated list of nodes that satisfy the filter conditions.</returns>
     [HttpGet]
@@ -129,7 +138,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
         [FromQuery] TaxoNodeFilterBindingModel model)
     {
         TaxoNodeFilter filter = model.ToNodeFilter();
-        DataPage<TaxoNode> result = await _store.GetNodesAsync(filter);
+        DataPage<TaxoNode> result = await _store.GetNodesAsync(filter,
+            model.IncludeMappings);
 
         if (model.IncludePosition)
         {
@@ -153,7 +163,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// <param name="model">An object containing filter and paging options to
     /// apply to the root node query. May include page number, page size, and
     /// additional filter criteria. Set IncludePosition=true to include X/Y
-    /// position data.</param>
+    /// position data, and IncludeMappings=true to include the mappings of
+    /// each node.</param>
     /// <returns>An <see cref="IActionResult"/> containing a paged collection
     /// of root nodes in JSON format with HTTP status code 200.</returns>
     [HttpGet("roots/{treeId}")]
@@ -168,7 +179,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
             PageNumber = model.PageNumber,
             PageSize = model.PageSize
         };
-        DataPage<TaxoNode> result = await _store.GetRootNodes(treeId, options);
+        DataPage<TaxoNode> result = await _store.GetRootNodes(treeId, options,
+            model.IncludeMappings);
 
         if (model.IncludePosition)
         {
@@ -190,13 +202,15 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// </summary>
     /// <remarks>When the node ID is 0 a new node is created; otherwise, the
     /// node with that ID is updated (or created with that ID if not found).
-    /// </remarks>
+    /// When the node's mappings are specified, they replace all the mappings
+    /// of that node (an empty array removes them all); when they are null
+    /// or omitted, the mappings of the node are left untouched.</remarks>
     /// <param name="model">The node data to create, provided in the request
     /// body. Must not be null.</param>
     /// <returns>A 201 Created response with a location header referencing
     /// the node, and the node ID in its body; 400 if the node is invalid
-    /// (e.g. missing tree or parent, parent in another tree, or parent
-    /// creating a cycle); 409 if its key is already used in the same
+    /// (e.g. missing tree or parent, parent in another tree, parent
+    /// creating a cycle, parent in a flat tree, or duplicate mappings); 409 if its key is already used in the same
     /// tree.</returns>
     [HttpPost]
     [Produces("application/json")]
@@ -281,6 +295,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// nodes are to be retrieved.</param>
     /// <param name="includePosition">If true, include X (sibling position) and
     /// Y (depth) in the response. Default is false for better performance.</param>
+    /// <param name="includeMappings">If true, include the mappings of each
+    /// node in the response. Default is false for better performance.</param>
     /// <returns>An <see cref="IActionResult"/> containing a JSON array of child
     /// nodes with HTTP status code 200 if successful.
     /// The array is empty if the parent node has no children.</returns>
@@ -289,9 +305,11 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     [ProducesResponseType(200)]
     public async Task<IActionResult> GetChildNodesAsync(
         [FromRoute] int id,
-        [FromQuery] bool includePosition = false)
+        [FromQuery] bool includePosition = false,
+        [FromQuery] bool includeMappings = false)
     {
-        IList<TaxoNode> nodes = await _store.GetChildNodesAsync(id);
+        IList<TaxoNode> nodes = await _store.GetChildNodesAsync(id,
+            includeMappings);
 
         if (includePosition)
         {
@@ -312,6 +330,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// descendant nodes.</param>
     /// <param name="includePosition">If true, include X (sibling position) and
     /// Y (depth) in the response. Default is false for better performance.</param>
+    /// <param name="includeMappings">If true, include the mappings of each
+    /// node in the response. Default is false for better performance.</param>
     /// <returns>An <see cref="IActionResult"/> containing a JSON array of
     /// descendant nodes with HTTP status code 200.</returns>
     [HttpGet("{id:int}/descendants")]
@@ -319,9 +339,11 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     [ProducesResponseType(200)]
     public async Task<IActionResult> GetDescendantNodesAsync(
         [FromRoute] int id,
-        [FromQuery] bool includePosition = false)
+        [FromQuery] bool includePosition = false,
+        [FromQuery] bool includeMappings = false)
     {
-        IList<TaxoNode> nodes = await _store.GetDescendantNodesAsync(id);
+        IList<TaxoNode> nodes = await _store.GetDescendantNodesAsync(id,
+            includeMappings);
 
         if (includePosition)
         {
@@ -339,6 +361,8 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     /// ancestor nodes.</param>
     /// <param name="includePosition">If true, include X (sibling position) and
     /// Y (depth) in the response. Default is false for better performance.</param>
+    /// <param name="includeMappings">If true, include the mappings of each
+    /// node in the response. Default is false for better performance.</param>
     /// <returns>An <see cref="IActionResult"/> containing a JSON array of
     /// ancestor nodes. Returns an empty array if the node has no ancestors.</returns>
     [HttpGet("{id:int}/ancestors")]
@@ -346,9 +370,11 @@ public sealed class TaxoNodeController(ITaxoStore store) : ControllerBase
     [ProducesResponseType(200)]
     public async Task<IActionResult> GetAncestorNodesAsync(
         [FromRoute] int id,
-        [FromQuery] bool includePosition = false)
+        [FromQuery] bool includePosition = false,
+        [FromQuery] bool includeMappings = false)
     {
-        IList<TaxoNode> nodes = await _store.GetAncestorNodesAsync(id);
+        IList<TaxoNode> nodes = await _store.GetAncestorNodesAsync(id,
+            includeMappings);
 
         if (includePosition)
         {

@@ -44,6 +44,13 @@ public sealed class ImportStoreSettings : CommandSettings
     public string? ConnectionTemplate { get; set; }
 
     /// <summary>
+    /// Path to the optional CSV file with node mappings.
+    /// </summary>
+    [CommandOption("-m|--mappings <MAPPINGS_CSV>")]
+    [Description("Path to the optional CSV file with node mappings.")]
+    public string? MappingsPath { get; set; }
+
+    /// <summary>
     /// Validates the settings.
     /// </summary>
     public override ValidationResult Validate()
@@ -64,6 +71,12 @@ public sealed class ImportStoreSettings : CommandSettings
         {
             return ValidationResult.Error(
                 $"Nodes CSV file not found: {NodesPath}");
+        }
+
+        if (!string.IsNullOrEmpty(MappingsPath) && !File.Exists(MappingsPath))
+        {
+            return ValidationResult.Error(
+                $"Mappings CSV file not found: {MappingsPath}");
         }
 
         return ValidationResult.Success();

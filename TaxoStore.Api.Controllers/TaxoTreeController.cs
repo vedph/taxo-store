@@ -64,8 +64,8 @@ public sealed class TaxoTreeController(ITaxoStore store) : ControllerBase
     /// <param name="model">The data used to create the new tree. Must not be
     /// null.</param>
     /// <returns>A 201 Created response with a location header referencing the
-    /// tree resource, and the tree ID in its body; 400 if the tree is invalid.
-    /// </returns>
+    /// tree resource, and the tree ID in its body; 400 if the tree is invalid
+    /// (e.g. it is set as flat while it has non-root nodes).</returns>
     [HttpPost]
     [Produces("application/json")]
     [ProducesResponseType(typeof(string), 201)]

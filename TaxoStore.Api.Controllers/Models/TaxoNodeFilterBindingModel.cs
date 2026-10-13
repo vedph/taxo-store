@@ -105,6 +105,27 @@ public class TaxoNodeFilterBindingModel
     public bool MatchDescendants { get; set; }
 
     /// <summary>
+    /// The exact scope of a mapping of the node: when set, only nodes having
+    /// at least one mapping with this scope are matched.
+    /// </summary>
+    [MaxLength(100)]
+    public string? MappingScope { get; set; }
+
+    /// <summary>
+    /// The exact target of a mapping of the node: when set, only nodes having
+    /// at least one mapping with this target (and with
+    /// <see cref="MappingScope"/>, when set) are matched.
+    /// </summary>
+    [MaxLength(500)]
+    public string? MappingTarget { get; set; }
+
+    /// <summary>
+    /// If true, include the mappings of each node in the response.
+    /// Default is false for better performance.
+    /// </summary>
+    public bool IncludeMappings { get; set; }
+
+    /// <summary>
     /// Creates a new <see cref="TaxoNodeFilter"/> instance populated with the
     /// current filter criteria.
     /// </summary>
@@ -126,7 +147,9 @@ public class TaxoNodeFilterBindingModel
             FlagMatchMode = FlagMatchMode,
             IsLeaf = IsLeaf,
             IsRoot = IsRoot,
-            MatchDescendants = MatchDescendants
+            MatchDescendants = MatchDescendants,
+            MappingScope = MappingScope,
+            MappingTarget = MappingTarget
         };
     }
 }

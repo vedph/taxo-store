@@ -11,8 +11,8 @@ public class TaxoStoreOptions
     public string Source { get; set; } = "";
 
     /// <summary>
-    /// True if <see cref="SeedTreeSource"/> and <see cref="SeedNodeSource"/>
-    /// are a CSV text to be read for seeding, rather than a path pointing to
+    /// True if <see cref="SeedTreeSource"/>, <see cref="SeedNodeSource"/> and
+    /// <see cref="SeedMappingSource"/> are a CSV text to be read for seeding, rather than a path pointing to
     /// a CSV file for seeding.
     /// </summary>
     public bool SeedSourceAsText { get; set; }
@@ -28,4 +28,11 @@ public class TaxoStoreOptions
     /// seeded nodes file used for initialization.
     /// </summary>
     public string? SeedNodeSource { get; set; }
+
+    /// <summary>
+    /// Gets or sets either a CSV file or the file system path to the CSV
+    /// seeded node mappings file used for initialization. This is optional:
+    /// when not specified, no mappings are seeded.
+    /// </summary>
+    public string? SeedMappingSource { get; set; }
 }

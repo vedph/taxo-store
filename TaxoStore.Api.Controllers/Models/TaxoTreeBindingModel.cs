@@ -31,10 +31,16 @@ public class TaxoTreeBindingModel
     public string? Note { get; set; }
 
     /// <summary>
-    /// Creates a new Tree instance that contains the current object's Id,
-    /// Name, and Note values.
+    /// True if this tree is flat, i.e. it is just a list: all its nodes are
+    /// root nodes.
     /// </summary>
-    /// <returns>A Tree object initialized with the Id, Name, and Note
+    public bool Flat { get; set; }
+
+    /// <summary>
+    /// Creates a new Tree instance that contains the current object's Id,
+    /// Name, Note, and Flat values.
+    /// </summary>
+    /// <returns>A Tree object initialized with the Id, Name, Note, and Flat
     /// properties of the current instance.</returns>
     public TaxoTree ToTree()
     {
@@ -42,7 +48,8 @@ public class TaxoTreeBindingModel
         {
             Id = Id,
             Name = Name,
-            Note = Note
+            Note = Note,
+            Flat = Flat
         };
     }
 }

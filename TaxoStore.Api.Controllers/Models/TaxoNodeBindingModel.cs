@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.Linq;
 using TaxoStore.Core;
 
 namespace TaxoStore.Api.Controllers.Models;
@@ -71,6 +73,14 @@ public class TaxoNodeBindingModel
     public string? Note { get; set; }
 
     /// <summary>
+    /// The mappings of this node to equivalent entities in external
+    /// resources. When null (or omitted), the mappings of the node are left
+    /// untouched; else, they replace all the mappings of the node, so that
+    /// an empty array removes them all.
+    /// </summary>
+    public IList<TaxoNodeMappingBindingModel>? Mappings { get; set; }
+
+    /// <summary>
     /// Creates a new <see cref="TaxoNode"/> instance that represents the current
     /// object's state.
     /// </summary>
@@ -87,7 +97,9 @@ public class TaxoNodeBindingModel
             Label = Label,
             FilteredLabel = FilteredLabel ?? Label,
             Flags = Flags,
-            Note = Note
+            Note = Note,
+            Mappings = Mappings == null
+                ? null : [.. Mappings.Select(m => m.ToMapping())]
         };
     }
 }

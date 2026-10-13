@@ -12,7 +12,11 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE TABLE tree (
     id          VARCHAR(100) PRIMARY KEY,
     name        VARCHAR(500) NOT NULL,
-    note        VARCHAR(5000)
+    note        VARCHAR(5000),
+
+    -- True for flat trees (lists), whose nodes are all root nodes. Enforced
+    -- by the store when writing trees and nodes.
+    flat        BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- B-tree for ORDER BY name in GetTreesAsync
@@ -80,3 +84,27 @@ CREATE INDEX idx_node_tree_parent_key ON node(tree_id, parent_id, key);
 --   • GetDescendantNodesAsync recursive: n.parent_id = d.id
 --   • IsLeaf correlated EXISTS: WHERE c.parent_id = n.id
 CREATE INDEX idx_node_parent_key ON node(parent_id, key);
+
+-- ============================================
+-- TABLE: node_mapping
+-- Maps a node to equivalent entities in external resources (e.g. authority
+-- lists like VIAF). When changing this table or tree.flat, also update the
+-- upgrade script in PgSqlTaxoStore (UPGRADE_SQL), which brings databases
+-- created by previous versions up to date.
+-- ============================================
+
+CREATE TABLE node_mapping (
+    node_id     INT NOT NULL REFERENCES node(id) ON DELETE CASCADE,
+    scope       VARCHAR(100) NOT NULL,
+    target      VARCHAR(500) NOT NULL,
+    label       VARCHAR(500),
+
+    -- A node cannot have the same target in the same scope more than once.
+    -- This also serves as the index for fetching the mappings of nodes:
+    -- WHERE node_id = ANY(...) ORDER BY node_id, scope, target.
+    CONSTRAINT pk_node_mapping PRIMARY KEY (node_id, scope, target)
+);
+
+-- Reverse lookup: find the node(s) mapped to a target in a scope, or having
+-- any mapping in a scope (GetNodesAsync MappingScope/MappingTarget filters).
+CREATE INDEX idx_node_mapping_scope_target ON node_mapping(scope, target);

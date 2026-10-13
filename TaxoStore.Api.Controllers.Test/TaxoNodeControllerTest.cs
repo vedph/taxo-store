@@ -289,6 +289,70 @@ languages,Programming Languages,
     }
 
     [Fact]
+    public async Task Mappings_AddAndGet_RoundTrip()
+    {
+        using PgSqlTaxoStore store = CreateStore();
+        TaxoNodeController controller = new(store);
+
+        TaxoNodeBindingModel model = new()
+        {
+            Id = 5,
+            TreeId = "languages",
+            ParentId = 2,
+            Key = "java",
+            Label = "Java",
+            Mappings =
+            [
+                new TaxoNodeMappingBindingModel
+                {
+                    Scope = "wikidata", Target = "Q251", Label = "Java"
+                }
+            ]
+        };
+        await controller.AddNodeAsync(model);
+
+        // single node: mappings only when requested
+        Assert.Null(GetValue<PositionedTaxoNodeModel>(
+            await controller.GetNodeAsync(5)).Mappings);
+        TaxoNodeMapping mapping = Assert.Single(
+            GetValue<PositionedTaxoNodeModel>(
+                await controller.GetNodeAsync(5, true)).Mappings!);
+        Assert.Equal("wikidata", mapping.Scope);
+        Assert.Equal("Q251", mapping.Target);
+        Assert.Equal("Java", mapping.Label);
+        Assert.Single(GetValue<PositionedTaxoNodeModel>(
+            await controller.GetNodeFromKeyAsync("languages", "java", true))
+            .Mappings!);
+
+        // lists, with and without position
+        Assert.Equal([0, 1], GetValue<IList<TaxoNode>>(
+            await controller.GetChildNodesAsync(2, false, true))
+            .Select(n => n.Mappings!.Count));
+        Assert.Equal([0, 1], GetValue<IList<PositionedTaxoNodeModel>>(
+            await controller.GetChildNodesAsync(2, true, true))
+            .Select(n => n.Mappings!.Count));
+
+        // filter by mapping
+        DataPage<TaxoNode> page = GetValue<DataPage<TaxoNode>>(
+            await controller.GetNodesAsync(new TaxoNodeFilterBindingModel
+            {
+                MappingScope = "wikidata",
+                MappingTarget = "Q251",
+                IncludeMappings = true
+            }));
+        Assert.Single(Assert.Single(page.Items).Mappings!);
+
+        // omitted mappings are left untouched, empty ones are removed
+        model.Mappings = null;
+        await controller.AddNodeAsync(model);
+        Assert.Single((await store.GetNodeAsync(5, true))!.Mappings!);
+
+        model.Mappings = [];
+        await controller.AddNodeAsync(model);
+        Assert.Empty((await store.GetNodeAsync(5, true))!.Mappings!);
+    }
+
+    [Fact]
     public async Task DeleteNodeAsync_ReturnsId()
     {
         using PgSqlTaxoStore store = CreateStore();

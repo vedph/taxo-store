@@ -1,5 +1,17 @@
 # History
 
+## 1.0.0
+
+- 2026-10-13: flat trees and node mappings.
+  - ⚠️ breaking changes:
+    - database schema: table `tree` has a new `flat` column, and there is a new `node_mapping` table. Existing databases are automatically upgraded when the store is initialized (see README).
+    - `ITaxoStore`: all the methods returning nodes have a new optional `includeMappings` parameter. Consumer code is not affected, but other implementations of the interface must be updated.
+  - flat trees: `TaxoTree.Flat` marks trees which are just lists of root nodes. The store rejects nodes with a parent in a flat tree, and setting as flat a tree having non-root nodes.
+  - node mappings: `TaxoNode.Mappings` maps a node to any number of external identifiers (scope, target, optional label; unique per node). When saving a node, null mappings are left untouched, while non-null mappings (even when empty) replace all the mappings of that node. Mappings are fetched only when requested via `includeMappings`.
+  - `TaxoNodeFilter` has new `MappingScope` and `MappingTarget` filters, to find nodes from their mappings.
+  - importer: `trees.csv` has a new optional `flat` column, and there is a new optional `mappings.csv` source (`TaxoStoreOptions.SeedMappingSource`, defaulting to `wwwroot/taxo/mappings.csv` in the API; `-m` option in `taxo-tool import-store`).
+  - API: `flat` in tree models, `mappings` in node models, `includeMappings` query parameter in all the endpoints returning nodes, `mappingScope` and `mappingTarget` in nodes filter.
+
 ## 0.0.9
 
 - 2026-10-03: robustness and performance review of store and API.

@@ -44,18 +44,26 @@ public class TaxoStoreServiceOptions
     public string? SeedNodeSource { get; set; }
 
     /// <summary>
+    /// Gets or sets either a CSV file or the file system path to the CSV
+    /// seeded node mappings file used for initialization. This is optional.
+    /// </summary>
+    public string? SeedMappingSource { get; set; }
+
+    /// <summary>
     /// Creates a new instance of the TaxoStoreOptions class using the current
     /// configuration values.
     /// </summary>
     /// <returns>A TaxoStoreOptions object initialized with the current
-    /// connection string, seed tree source, and seed nodesource.</returns>
+    /// connection string, seed tree source, seed node source, and seed
+    /// mapping source.</returns>
     public TaxoStoreOptions ToTaxoStoreOptions()
     {
         return new TaxoStoreOptions
         {
             Source = ConnectionString ?? "",
             SeedTreeSource = SeedTreeSource,
-            SeedNodeSource = SeedNodeSource
+            SeedNodeSource = SeedNodeSource,
+            SeedMappingSource = SeedMappingSource
         };
     }
 }

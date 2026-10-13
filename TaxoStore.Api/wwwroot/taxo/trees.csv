@@ -1,3 +1,4 @@
-id,name,note
-animals,Animals,Sample hierarchy of animals.
-food,Food,Sample hierarchy of foods.
+id,name,note,flat
+animals,Animals,Sample hierarchy of animals.,
+food,Food,Sample hierarchy of foods.,
+philosophers,Greek Philosophers,Sample flat list of ancient Greek philosophers.,true

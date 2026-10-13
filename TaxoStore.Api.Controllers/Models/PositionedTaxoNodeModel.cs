@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using TaxoStore.Core;
+
 namespace TaxoStore.Api.Controllers.Models;
 
 /// <summary>
@@ -54,6 +57,12 @@ public class PositionedTaxoNodeModel
     /// An optional note attached to this node.
     /// </summary>
     public string? Note { get; set; }
+
+    /// <summary>
+    /// The mappings of this node to equivalent entities in external
+    /// resources. This is null unless mappings were requested.
+    /// </summary>
+    public IList<TaxoNodeMapping>? Mappings { get; set; }
 
     /// <summary>
     /// The depth level (1-based). Root nodes have Y=1, their children Y=2, etc.
