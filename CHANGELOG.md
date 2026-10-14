@@ -1,5 +1,9 @@
 # History
 
+## 1.0.1
+
+- 2026-10-14: import `note` column from `nodes.csv` into `TaxoNode.Note`.
+
 ## 1.0.0
 
 - 2026-10-13: flat trees and node mappings.

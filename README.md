@@ -206,12 +206,12 @@ colors,Colors,"A flat list of colors",true
 - 📁 `nodes.csv`:
 
 ```csv
-tree_n,parent_key,key,label,filtered_label,flags
-1,,electronics,Electronics,electronics,
-1,electronics,computers,Computers,computers,
-1,electronics,phones,Mobile Phones,mobile phones,
-2,,food,Food & Beverages,food beverages,
-3,,red,Red,red,
+tree_n,parent_key,key,label,filtered_label,flags,note
+1,,electronics,Electronics,electronics,,
+1,electronics,computers,Computers,computers,,"Desktops, laptops, and servers"
+1,electronics,phones,Mobile Phones,mobile phones,,
+2,,food,Food & Beverages,food beverages,,
+3,,red,Red,red,,
 ```
 
 - 📁 `mappings.csv` (optional):
@@ -238,6 +238,7 @@ Fields in `nodes.csv`:
 - `label`: display label.
 - `filtered_label`: searchable label (auto-generated if empty).
 - `flags`: optional flags string.
+- `note`: optional note (the column itself can be omitted). Like any other field, it must be wrapped in double quotes when it includes the delimiter, quotes (escaped by doubling them) or line breaks.
 
 Fields in `mappings.csv`:
 

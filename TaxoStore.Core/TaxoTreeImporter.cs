@@ -159,8 +159,9 @@ public sealed class TaxoTreeImporter
     /// flat trees, whose nodes cannot have a parent).</param>
     /// <param name="nodeReader">A <see cref="TextReader"/> providing CSV data
     /// for nodes. The CSV must contain a header row and fields such as
-    /// 'tree_n', 'parent_key', 'key', 'label', 'filtered_label', and 'flags'.
-    /// </param>
+    /// 'tree_n', 'parent_key', 'key', 'label', 'filtered_label', 'flags',
+    /// and 'note' (optional column). Fields including the delimiter must be
+    /// wrapped in double quotes.</param>
     /// <param name="mappingReader">An optional <see cref="TextReader"/>
     /// providing CSV data for node mappings. The CSV must contain a header
     /// row and fields 'tree_n', 'node_key', 'scope', 'target', and 'label'.
@@ -172,9 +173,14 @@ public sealed class TaxoTreeImporter
     public async Task<int> ImportAsync(TextReader treeReader,
         TextReader nodeReader, TextReader? mappingReader = null)
     {
+        // RFC 4180 mode: fields (e.g. labels or notes) including the
+        // delimiter, quotes or line breaks must be wrapped in double quotes,
+        // with any inner quote doubled
         CsvConfiguration config = new(CultureInfo.InvariantCulture)
         {
-            Delimiter = Delimiter
+            Delimiter = Delimiter,
+            Mode = CsvMode.RFC4180,
+            Quote = '"'
         };
 
         _logger.LogInformation("Starting TaxoStore CSV import");
@@ -275,6 +281,10 @@ public sealed class TaxoTreeImporter
 
                 // flags
                 node.Flags = nodeCsv.GetField<string?>("flags");
+
+                // note (optional column)
+                node.Note = nodeCsv.TryGetField("note", out string? note)
+                    && !string.IsNullOrEmpty(note) ? note : null;
 
                 // parent ID will be set in pass 2
                 node.ParentId = null;

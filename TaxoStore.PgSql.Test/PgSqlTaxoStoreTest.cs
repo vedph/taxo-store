@@ -1688,11 +1688,11 @@ colors,Colors,A list,true
 ";
 
     private const string FLAT_NODES_CSV =
-        @"tree_n,parent_key,key,label,filtered_label,flags
-1,,prog,Programming,programming,
-1,prog,oop,Object-Oriented,object oriented,
-2,,red,Red,red,
-2,,green,Green,green,
+        @"tree_n,parent_key,key,label,filtered_label,flags,note
+1,,prog,Programming,programming,,
+1,prog,oop,Object-Oriented,object oriented,,""Classes, objects, and """"inheritance""""""
+2,,red,Red,red,,A warm color
+2,,green,Green,green,,
 ";
 
     private const string MAPPINGS_CSV = @"tree_n,node_key,scope,target,label
@@ -1732,6 +1732,34 @@ colors,Colors,A list,true
     }
 
     [Fact]
+    public async Task ImportAsync_Notes_ImportsThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        await importer.ImportAsync(
+            new StringReader(FLAT_TREES_CSV),
+            new StringReader(FLAT_NODES_CSV));
+
+        // quoted note including delimiters and escaped quotes
+        Assert.Equal("Classes, objects, and \"inheritance\"",
+            (await store.GetNodeFromKeyAsync("languages", "oop"))!.Note);
+        Assert.Equal("A warm color",
+            (await store.GetNodeFromKeyAsync("colors", "red"))!.Note);
+        // empty note is imported as null
+        Assert.Null((await store.GetNodeFromKeyAsync("colors", "green"))!.Note);
+    }
+
+    [Fact]
+    public async Task ImportAsync_NoNoteColumn_ImportsNullNotes()
+    {
+        // the seed nodes CSV has no note column
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        Assert.Null((await store.GetNodeFromKeyAsync("languages", "oop"))!.Note);
+    }
+
+    [Fact]
     public async Task ImportAsync_ParentInFlatTree_Throws()
     {
         using PgSqlTaxoStore store = CreateStoreAsync(true);
@@ -1740,7 +1768,7 @@ colors,Colors,A list,true
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             importer.ImportAsync(
                 new StringReader(FLAT_TREES_CSV),
-                new StringReader(FLAT_NODES_CSV + "2,red,crimson,Crimson,,\n")));
+                new StringReader(FLAT_NODES_CSV + "2,red,crimson,Crimson,,,\n")));
 
         Assert.Null(await store.GetNodeFromKeyAsync("colors", "red"));
     }
