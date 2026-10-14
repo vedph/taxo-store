@@ -32,6 +32,13 @@ public class TaxoNodeMappingBindingModel
     public string? Label { get; set; }
 
     /// <summary>
+    /// The optional filtered version of <see cref="Label"/>, used for
+    /// searching. When not set, the label is used.
+    /// </summary>
+    [MaxLength(500)]
+    public string? FilteredLabel { get; set; }
+
+    /// <summary>
     /// Creates a new <see cref="TaxoNodeMapping"/> instance that represents
     /// the current object's state.
     /// </summary>
@@ -42,7 +49,8 @@ public class TaxoNodeMappingBindingModel
         {
             Scope = Scope,
             Target = Target,
-            Label = Label
+            Label = Label,
+            FilteredLabel = FilteredLabel
         };
     }
 }

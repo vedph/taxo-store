@@ -26,6 +26,14 @@ public class TaxoNodeMapping
     public string? Label { get; set; }
 
     /// <summary>
+    /// The filtered version of <see cref="Label"/>, used for searching
+    /// mappings (e.g. aliases of the mapped node) with the same criteria
+    /// used for <see cref="TaxoNode.FilteredLabel"/>. When not set, stores
+    /// fall back to <see cref="Label"/>.
+    /// </summary>
+    public string? FilteredLabel { get; set; }
+
+    /// <summary>
     /// Returns a string representing this mapping.
     /// </summary>
     /// <returns>String.</returns>

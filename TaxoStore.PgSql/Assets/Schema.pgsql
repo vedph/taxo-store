@@ -98,6 +98,9 @@ CREATE TABLE node_mapping (
     scope       VARCHAR(100) NOT NULL,
     target      VARCHAR(500) NOT NULL,
     label       VARCHAR(500),
+    -- The filtered label, used for searching mappings (e.g. aliases) with
+    -- the same criteria used for node.label_ix. Null when there is no label.
+    label_ix    VARCHAR(500),
 
     -- A node cannot have the same target in the same scope more than once.
     -- This also serves as the index for fetching the mappings of nodes:
@@ -108,3 +111,11 @@ CREATE TABLE node_mapping (
 -- Reverse lookup: find the node(s) mapped to a target in a scope, or having
 -- any mapping in a scope (GetNodesAsync MappingScope/MappingTarget filters).
 CREATE INDEX idx_node_mapping_scope_target ON node_mapping(scope, target);
+
+-- Trigram index on label_ix for ILIKE '%pattern%' mapping label searches
+-- (GetNodesAsync FilteredMappingLabel filter, also in MatchDescendants CTE).
+-- This yields the IDs of the matching nodes (node_id), which are then
+-- joined to node via its primary key; when combined with FilteredLabel,
+-- the two trigram scans (on node and node_mapping) are merged with UNION.
+CREATE INDEX idx_node_mapping_label_ix_trgm ON node_mapping
+    USING gin(label_ix gin_trgm_ops);

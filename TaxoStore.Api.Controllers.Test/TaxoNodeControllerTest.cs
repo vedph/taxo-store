@@ -306,6 +306,11 @@ languages,Programming Languages,
                 new TaxoNodeMappingBindingModel
                 {
                     Scope = "wikidata", Target = "Q251", Label = "Java"
+                },
+                new TaxoNodeMappingBindingModel
+                {
+                    Scope = "alias", Target = "1", Label = "Giava",
+                    FilteredLabel = "giava"
                 }
             ]
         };
@@ -314,21 +319,25 @@ languages,Programming Languages,
         // single node: mappings only when requested
         Assert.Null(GetValue<PositionedTaxoNodeModel>(
             await controller.GetNodeAsync(5)).Mappings);
-        TaxoNodeMapping mapping = Assert.Single(
-            GetValue<PositionedTaxoNodeModel>(
-                await controller.GetNodeAsync(5, true)).Mappings!);
+        IList<TaxoNodeMapping> mappings = GetValue<PositionedTaxoNodeModel>(
+            await controller.GetNodeAsync(5, true)).Mappings!;
+        Assert.Equal(2, mappings.Count);
+        Assert.Equal("alias", mappings[0].Scope);
+        Assert.Equal("giava", mappings[0].FilteredLabel);
+        TaxoNodeMapping mapping = mappings[1];
         Assert.Equal("wikidata", mapping.Scope);
         Assert.Equal("Q251", mapping.Target);
         Assert.Equal("Java", mapping.Label);
-        Assert.Single(GetValue<PositionedTaxoNodeModel>(
+        Assert.Equal("Java", mapping.FilteredLabel);
+        Assert.Equal(2, GetValue<PositionedTaxoNodeModel>(
             await controller.GetNodeFromKeyAsync("languages", "java", true))
-            .Mappings!);
+            .Mappings!.Count);
 
         // lists, with and without position
-        Assert.Equal([0, 1], GetValue<IList<TaxoNode>>(
+        Assert.Equal([0, 2], GetValue<IList<TaxoNode>>(
             await controller.GetChildNodesAsync(2, false, true))
             .Select(n => n.Mappings!.Count));
-        Assert.Equal([0, 1], GetValue<IList<PositionedTaxoNodeModel>>(
+        Assert.Equal([0, 2], GetValue<IList<PositionedTaxoNodeModel>>(
             await controller.GetChildNodesAsync(2, true, true))
             .Select(n => n.Mappings!.Count));
 
@@ -340,12 +349,22 @@ languages,Programming Languages,
                 MappingTarget = "Q251",
                 IncludeMappings = true
             }));
-        Assert.Single(Assert.Single(page.Items).Mappings!);
+        Assert.Equal(2, Assert.Single(page.Items).Mappings!.Count);
+
+        // filter by node label or mapping label
+        page = GetValue<DataPage<TaxoNode>>(
+            await controller.GetNodesAsync(new TaxoNodeFilterBindingModel
+            {
+                TreeId = "languages",
+                FilteredLabel = "giav",
+                FilteredMappingLabel = "giav"
+            }));
+        Assert.Equal("java", Assert.Single(page.Items).Key);
 
         // omitted mappings are left untouched, empty ones are removed
         model.Mappings = null;
         await controller.AddNodeAsync(model);
-        Assert.Single((await store.GetNodeAsync(5, true))!.Mappings!);
+        Assert.Equal(2, (await store.GetNodeAsync(5, true))!.Mappings!.Count);
 
         model.Mappings = [];
         await controller.AddNodeAsync(model);

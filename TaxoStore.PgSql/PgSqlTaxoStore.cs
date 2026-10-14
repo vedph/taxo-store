@@ -51,7 +51,13 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         "label VARCHAR(500), " +
         "CONSTRAINT pk_node_mapping PRIMARY KEY (node_id, scope, target)); " +
         "CREATE INDEX IF NOT EXISTS idx_node_mapping_scope_target " +
-        "ON node_mapping(scope, target);";
+        "ON node_mapping(scope, target); " +
+        "ALTER TABLE node_mapping ADD COLUMN IF NOT EXISTS " +
+        "label_ix VARCHAR(500); " +
+        "UPDATE node_mapping SET label_ix = label " +
+        "WHERE label_ix IS NULL AND label IS NOT NULL; " +
+        "CREATE INDEX IF NOT EXISTS idx_node_mapping_label_ix_trgm " +
+        "ON node_mapping USING gin(label_ix gin_trgm_ops);";
 
     private readonly TaxoStoreOptions _options;
     private readonly ILogger _logger;
@@ -609,8 +615,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         if (mappings.Count == 0) return;
 
         await using NpgsqlCommand command = new(
-            "SELECT node_id, scope, target, label FROM node_mapping " +
-            "WHERE node_id = ANY(@ids) ORDER BY node_id, scope, target",
+            "SELECT node_id, scope, target, label, label_ix " +
+            "FROM node_mapping WHERE node_id = ANY(@ids) ORDER BY node_id, scope, target",
             connection);
         command.Parameters.AddWithValue("ids", mappings.Keys.ToArray());
 
@@ -621,7 +627,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
             {
                 Scope = reader.GetString(1),
                 Target = reader.GetString(2),
-                Label = reader.IsDBNull(3) ? null : reader.GetString(3)
+                Label = reader.IsDBNull(3) ? null : reader.GetString(3),
+                FilteredLabel = reader.IsDBNull(4) ? null : reader.GetString(4)
             });
         }
     }
@@ -775,28 +782,54 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                 filter.AncestorKey));
         }
 
-        // filtered label (contains), optionally matching descendants
-        if (!string.IsNullOrEmpty(filter.FilteredLabel))
+        // filtered label of node and/or of its mappings (contains, combined
+        // with OR), optionally matching descendants
+        bool hasLabel = !string.IsNullOrEmpty(filter.FilteredLabel);
+        bool hasMappingLabel =
+            !string.IsNullOrEmpty(filter.FilteredMappingLabel);
+        if (hasLabel || hasMappingLabel)
         {
-            parameters.Add(new NpgsqlParameter("filteredLabel",
-                BuildContainsPattern(filter.FilteredLabel)));
+            // the matching nodes as (id, parent_id); each branch can use
+            // the trigram index on its label_ix, and UNION merges them
+            List<string> matches = [];
+            if (hasLabel)
+            {
+                parameters.Add(new NpgsqlParameter("filteredLabel",
+                    BuildContainsPattern(filter.FilteredLabel!)));
+                matches.Add("SELECT id, parent_id FROM node " +
+                    "WHERE label_ix ILIKE @filteredLabel" +
+                    (hasTree ? " AND tree_id = @treeId" : ""));
+            }
+            if (hasMappingLabel)
+            {
+                parameters.Add(new NpgsqlParameter("filteredMappingLabel",
+                    BuildContainsPattern(filter.FilteredMappingLabel!)));
+                matches.Add("SELECT x.id, x.parent_id FROM node_mapping m " +
+                    "JOIN node x ON x.id = m.node_id " +
+                    "WHERE m.label_ix ILIKE @filteredMappingLabel" +
+                    (hasTree ? " AND x.tree_id = @treeId" : ""));
+            }
+            string matchSql = string.Join(" UNION ", matches);
 
             if (filter.MatchDescendants)
             {
                 // walk up from matching nodes to collect them and all their
                 // ancestors
+                ctes.Add($"lx(id, parent_id) AS ({matchSql})");
                 ctes.Add("lm(id, parent_id) AS (" +
-                    "SELECT id, parent_id FROM node " +
-                    "WHERE label_ix ILIKE @filteredLabel" +
-                    (hasTree ? " AND tree_id = @treeId" : "") +
+                    "SELECT id, parent_id FROM lx" +
                     " UNION " +
                     "SELECT x.id, x.parent_id FROM lm " +
                     "JOIN node x ON x.id = lm.parent_id)");
                 where.Add("n.id IN (SELECT id FROM lm)");
             }
-            else
+            else if (!hasMappingLabel)
             {
                 where.Add("n.label_ix ILIKE @filteredLabel");
+            }
+            else
+            {
+                where.Add($"n.id IN (SELECT id FROM ({matchSql}) lx)");
             }
         }
 
@@ -1157,6 +1190,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         List<string> scopes = [];
         List<string> targets = [];
         List<string?> labels = [];
+        List<string?> filteredLabels = [];
         foreach (KeyValuePair<int, IList<TaxoNodeMapping>> p in mappings)
         {
             foreach (TaxoNodeMapping mapping in p.Value)
@@ -1164,16 +1198,22 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
                 nodeIds.Add(p.Key);
                 scopes.Add(mapping.Scope);
                 targets.Add(mapping.Target);
-                labels.Add(string.IsNullOrEmpty(mapping.Label)
-                    ? null : mapping.Label);
+                string? label = string.IsNullOrEmpty(mapping.Label)
+                    ? null : mapping.Label;
+                labels.Add(label);
+                // as for nodes, fall back to label when not filtered
+                filteredLabels.Add(string.IsNullOrEmpty(mapping.FilteredLabel)
+                    ? label : mapping.FilteredLabel);
             }
         }
         if (nodeIds.Count == 0) return;
 
         // insert all the mappings with a single command
         await using NpgsqlCommand insert = new(
-            "INSERT INTO node_mapping (node_id, scope, target, label) " +
-            "SELECT * FROM unnest(@nodeIds, @scopes, @targets, @labels)",
+            "INSERT INTO node_mapping " +
+            "(node_id, scope, target, label, label_ix) " +
+            "SELECT * FROM unnest(@nodeIds, @scopes, @targets, @labels, " +
+            "@filteredLabels)",
             connection, transaction);
         insert.Parameters.AddWithValue("nodeIds", nodeIds.ToArray());
         insert.Parameters.Add(new NpgsqlParameter("scopes",
@@ -1185,6 +1225,9 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
         insert.Parameters.Add(new NpgsqlParameter("labels",
             NpgsqlDbType.Array | NpgsqlDbType.Varchar)
             { Value = labels.ToArray() });
+        insert.Parameters.Add(new NpgsqlParameter("filteredLabels",
+            NpgsqlDbType.Array | NpgsqlDbType.Varchar)
+            { Value = filteredLabels.ToArray() });
         await insert.ExecuteNonQueryAsync();
     }
 

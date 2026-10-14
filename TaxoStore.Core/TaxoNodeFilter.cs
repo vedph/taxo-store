@@ -38,9 +38,22 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
     public string? AncestorKey { get; set; }
 
     /// <summary>
-    /// Any part of the node's filtered label.
+    /// Any part of the node's filtered label. When
+    /// <see cref="FilteredMappingLabel"/> is also set, a node matches if
+    /// either its filtered label matches this, or the filtered label of any
+    /// of its mappings matches <see cref="FilteredMappingLabel"/>.
     /// </summary>
     public string? FilteredLabel { get; set; }
+
+    /// <summary>
+    /// Any part of the filtered label of any of the node's mappings. This
+    /// is typically used to find nodes also via their aliases stored as
+    /// mappings. When <see cref="FilteredLabel"/> is also set, the two
+    /// criteria are combined with OR rather than AND: a node matches if
+    /// either its own filtered label or the filtered label of any of its
+    /// mappings matches. Usually, both are set to the same value.
+    /// </summary>
+    public string? FilteredMappingLabel { get; set; }
 
     /// <summary>
     /// The flags to match.
@@ -68,8 +81,9 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
     public bool IsRoot { get; set; }
 
     /// <summary>
-    /// When true and <see cref="FilteredLabel"/> is set, a node is included
-    /// if it directly matches the label OR if any of its descendants match.
+    /// When true and <see cref="FilteredLabel"/> and/or
+    /// <see cref="FilteredMappingLabel"/> are set, a node is included if it
+    /// directly matches the label(s) OR if any of its descendants match.
     /// Implemented via a reverse-recursive CTE that walks from matching nodes
     /// up to their ancestors. This can be combined with
     /// <see cref="AncestorKey"/>.
@@ -114,6 +128,12 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
 
         if (!string.IsNullOrEmpty(FilteredLabel))
             sb.Append("FilteredLabel=").Append(FilteredLabel).Append(';');
+
+        if (!string.IsNullOrEmpty(FilteredMappingLabel))
+        {
+            sb.Append("FilteredMappingLabel=").Append(FilteredMappingLabel)
+              .Append(';');
+        }
 
         if (!string.IsNullOrEmpty(Flags))
             sb.Append("Flags=").Append(Flags)

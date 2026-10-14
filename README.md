@@ -40,6 +40,9 @@ A mapping has:
 - `scope` (max 100 characters): the external resource the target belongs to. For instance, if the target is a VIAF record ID, which is just a number, a scope equal to `viaf` tells which resource that number refers to.
 - `target` (max 500 characters): the ID of the equivalent entity in that resource, e.g. the VIAF ID.
 - `label` (max 500 characters, optional): a human-friendly label for the target.
+- `filteredLabel` (max 500 characters, optional): the searchable (filtered) counterpart of `label`, built with the same criteria used for the node's filtered label. When not set, the store falls back to `label`; the CSV importer generates it from `label` when empty.
+
+Mapping labels are also useful to store **aliases** of the node's label (e.g. `Federigo` for `Federico`), possibly with a dedicated scope: as mapping filtered labels can be searched together with the node's filtered label, a lookup can find the node either via its label or via any of its aliases.
 
 A mapping is identified by its node, scope and target (the primary key of table `node_mapping`), so the same node cannot have the same target in the same scope more than once, while different nodes can be mapped to the same target.
 
@@ -47,7 +50,7 @@ Mappings are read and written together with their node:
 
 - **reading**: all the methods and endpoints returning nodes have an `includeMappings` option, false by default, so that mappings are fetched only when requested (with a single additional query, whatever the number of nodes). When not requested, the node's `mappings` are null; when requested, they are an array, empty if the node has no mappings, sorted by scope and target.
 - **writing**: when saving a node, a null (or omitted) `mappings` property leaves the mappings of that node untouched; any other value replaces them all, so that an empty array removes all the mappings of the node. This means that you can safely read a node without its mappings, edit it and save it back without losing them.
-- **searching**: nodes can be filtered by the exact scope and/or target of their mappings (`mappingScope`, `mappingTarget`), e.g. to find the node mapped to a given VIAF ID.
+- **searching**: nodes can be filtered by the exact scope and/or target of their mappings (`mappingScope`, `mappingTarget`), e.g. to find the node mapped to a given VIAF ID; and by any part of the filtered label of any of their mappings (`filteredMappingLabel`). When both `filteredLabel` and `filteredMappingLabel` are set, they are combined with **OR**: a node matches when either its own filtered label or the filtered label of any of its mappings matches. So, a lookup typically sets both to the same text, to find nodes via their labels or their aliases.
 - deleting a node also deletes its mappings.
 
 ### Computed Position Properties
@@ -217,10 +220,11 @@ tree_n,parent_key,key,label,filtered_label,flags,note
 - 📁 `mappings.csv` (optional):
 
 ```csv
-tree_n,node_key,scope,target,label
-1,computers,wikidata,Q68,computer
-1,computers,getty,300212998,computers
-3,red,getty,300126225,red (color)
+tree_n,node_key,scope,target,label,filtered_label
+1,computers,wikidata,Q68,computer,
+1,computers,getty,300212998,computers,
+1,computers,alias,it,Calcolatóri,calcolatori
+3,red,getty,300126225,red (color),
 ```
 
 Fields in `trees.csv`:
@@ -247,6 +251,7 @@ Fields in `mappings.csv`:
 - `scope`: the scope of the target (e.g. `viaf`).
 - `target`: the target ID.
 - `label`: optional human-friendly label of the target.
+- `filtered_label`: optional searchable label of the target (auto-generated from `label` if empty). The column itself can be omitted.
 
 > To specify custom paths for seed files:
 
@@ -278,7 +283,7 @@ Note:
 
 ### Upgrading Existing Databases
 
-Flat trees and node mappings require a `flat` column in table `tree` and a new `node_mapping` table. When the store is initialized on a database which already exists, it runs an idempotent upgrade script which adds them when missing, leaving existing data untouched (existing trees are not flat, and nodes have no mappings). So, no manual migration is required; the database user must just be allowed to alter the schema. Should you prefer to upgrade the database by yourself, this is the script:
+Flat trees and node mappings require a `flat` column in table `tree` and a new `node_mapping` table; mapping filtered labels require a `label_ix` column in `node_mapping`. When the store is initialized on a database which already exists, it runs an idempotent upgrade script which adds them when missing, leaving existing data untouched (existing trees are not flat, nodes have no mappings, and the filtered label of existing mappings is copied from their label). So, no manual migration is required; the database user must just be allowed to alter the schema. Should you prefer to upgrade the database by yourself, this is the script:
 
 ```sql
 ALTER TABLE tree ADD COLUMN IF NOT EXISTS flat BOOLEAN NOT NULL DEFAULT FALSE;
@@ -292,6 +297,10 @@ CREATE TABLE IF NOT EXISTS node_mapping (
 );
 
 CREATE INDEX IF NOT EXISTS idx_node_mapping_scope_target ON node_mapping(scope, target);
+
+ALTER TABLE node_mapping ADD COLUMN IF NOT EXISTS label_ix VARCHAR(500);
+UPDATE node_mapping SET label_ix = label WHERE label_ix IS NULL AND label IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_node_mapping_label_ix_trgm ON node_mapping USING gin(label_ix gin_trgm_ops);
 ```
 
 ### Available API Endpoints
@@ -307,11 +316,12 @@ Once integrated, the following endpoints become available:
 - **Node Endpoints** (via `TaxoNodeController`):
   - `GET /api/taxostore/nodes/{id}` - Get a node by its numeric ID (query params: includeMappings). Returns `PositionedNodeModel` with X/Y/HasChildren.
   - `GET /api/taxostore/nodes/tree/{treeId}/key/{key}` - Get a node by tree ID (string) and node key (string) (query params: includeMappings). Returns `PositionedNodeModel` with X/Y/HasChildren.
-  - `GET /api/taxostore/nodes` - Get paginated nodes with filtering (query params: pageNumber, pageSize, treeId, parentId, isRoot, key, parentKey, ancestorKey, filteredLabel, matchDescendants, flags, flagMatchMode, isLeaf, mappingScope, mappingTarget, includePosition, includeMappings). Notes:
+  - `GET /api/taxostore/nodes` - Get paginated nodes with filtering (query params: pageNumber, pageSize, treeId, parentId, isRoot, key, parentKey, ancestorKey, filteredLabel, filteredMappingLabel, matchDescendants, flags, flagMatchMode, isLeaf, mappingScope, mappingTarget, includePosition, includeMappings). Notes:
     - `pageSize`=0 disables paging and returns all the matching nodes.
-    - `key`, `parentKey`, `filteredLabel` match any part of the corresponding value (case-insensitive; `%` and `_` are matched literally).
+    - `key`, `parentKey`, `filteredLabel`, `filteredMappingLabel` match any part of the corresponding value (case-insensitive; `%` and `_` are matched literally).
     - `ancestorKey` is the exact key of an ancestor node: only its descendants (at any depth) are matched.
-    - `matchDescendants`: when true with `filteredLabel`, a node matches also when any of its descendants match the label.
+    - `filteredMappingLabel` matches the filtered label of any mapping of the node. When `filteredLabel` is also set, the two are combined with OR (the node's own filtered label or any of its mapping filtered labels).
+    - `matchDescendants`: when true with `filteredLabel` and/or `filteredMappingLabel`, a node matches also when any of its descendants match the label(s).
     - `flags` is a set of single-character flags; `flagMatchMode` is `any` (default: at least one flag present), `all` (all flags present), or `none` (no flag present).
     - `mappingScope`, `mappingTarget` match the exact scope and/or target of a mapping of the node (case-sensitive). When both are specified, they must be matched by the same mapping.
   - `GET /api/taxostore/nodes/roots/{treeId}` - Get root nodes of a tree (query params: pageNumber, pageSize, includePosition, includeMappings).
@@ -339,7 +349,8 @@ Example of a node with mappings, as posted to `POST /api/taxostore/nodes`:
   "label": "Dante Alighieri",
   "mappings": [
     { "scope": "viaf", "target": "97105654", "label": "Dante Alighieri, 1265-1321" },
-    { "scope": "wikidata", "target": "Q1067" }
+    { "scope": "wikidata", "target": "Q1067" },
+    { "scope": "alias", "target": "1", "label": "Durante degli Alighièri", "filteredLabel": "durante degli alighieri" }
   ]
 }
 ```

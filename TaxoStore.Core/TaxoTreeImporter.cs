@@ -129,6 +129,18 @@ public sealed class TaxoTreeImporter
             }
 
             string? label = csv.GetField<string?>("label");
+            if (string.IsNullOrEmpty(label)) label = null;
+
+            // filtered label (optional column; compute if missing)
+            string? filteredLabel =
+                csv.TryGetField("filtered_label", out string? fl)
+                && !string.IsNullOrEmpty(fl) ? fl : null;
+            if (filteredLabel == null && label != null)
+            {
+                filteredLabel = FilterLabel(label);
+                if (filteredLabel.Length == 0) filteredLabel = null;
+            }
+
             node.Mappings ??= [];
             node.Mappings.Add(new TaxoNodeMapping
             {
@@ -136,7 +148,8 @@ public sealed class TaxoTreeImporter
                     ?? throw new Exception("Mapping scope is required"),
                 Target = csv.GetField<string>("target")
                     ?? throw new Exception("Mapping target is required"),
-                Label = string.IsNullOrEmpty(label) ? null : label
+                Label = label,
+                FilteredLabel = filteredLabel
             });
             count++;
         }
@@ -164,7 +177,9 @@ public sealed class TaxoTreeImporter
     /// wrapped in double quotes.</param>
     /// <param name="mappingReader">An optional <see cref="TextReader"/>
     /// providing CSV data for node mappings. The CSV must contain a header
-    /// row and fields 'tree_n', 'node_key', 'scope', 'target', and 'label'.
+    /// row and fields 'tree_n', 'node_key', 'scope', 'target', 'label', and
+    /// 'filtered_label' (optional column; when empty, it is computed from
+    /// 'label').
     /// Each mapping must refer to a node found in the nodes CSV.</param>
     /// <returns>The total number of nodes successfully imported and added to
     /// the data store. Returns 0 if no data is available.</returns>

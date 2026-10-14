@@ -1,34 +1,39 @@
-tree_n,node_key,scope,target,label
-1,animal,mock-wiki,MW-000001,animal
-1,animal,mock-thesaurus,300000001,animals (fauna)
-1,animal.mammal,mock-wiki,MW-000010,mammal
-1,animal.mammal.dog,mock-wiki,MW-000144,dog
-1,animal.mammal.dog,mock-thesaurus,300000144,dogs (species)
-1,animal.mammal.dog,mock-gazetteer,dog-0001,
-1,animal.mammal.cat,mock-wiki,MW-000146,cat
-1,animal.mammal.cat,mock-thesaurus,300000146,cats (species)
-1,animal.mammal.lion,mock-wiki,MW-000140,lion
-1,animal.mammal.elephant,mock-wiki,MW-007378,elephant
-1,animal.mammal.horse,mock-thesaurus,300000726,horses (species)
-1,animal.bird,mock-wiki,MW-005113,bird
-1,animal.bird.eagle,mock-wiki,MW-002092,eagle
-1,animal.bird.owl,mock-thesaurus,300000825,owls (birds)
-2,fruit,mock-wiki,MW-003314,fruit
-2,fruit.pome.apple,mock-wiki,MW-000089,apple
-2,fruit.pome.apple,mock-thesaurus,300000089,apples (fruit)
-2,fruit.citrus.orange,mock-wiki,MW-013191,orange
-2,fruit.citrus.lemon,mock-wiki,MW-000500,"lemon, common"
-2,vegetable.root.carrot,mock-thesaurus,300081967,carrots (vegetable)
-2,legume.bean.chickpea,mock-wiki,MW-081375,chickpea
-3,aristotle,mock-viaf,900000001,"Aristotle, 384-322 BC"
-3,aristotle,mock-wiki,MW-000868,Aristotle
-3,plato,mock-viaf,900000002,"Plato, 427-347 BC"
-3,plato,mock-wiki,MW-000859,Plato
-3,plato,mock-thesaurus,300500859,
-3,socrates,mock-viaf,900000003,"Socrates, 469-399 BC"
-3,socrates,mock-wiki,MW-000913,Socrates
-3,epicurus,mock-viaf,900000004,Epicurus
-3,heraclitus,mock-wiki,MW-041155,Heraclitus
-3,pythagoras,mock-viaf,900000005,Pythagoras
-3,zeno-citium,mock-wiki,MW-171303,Zeno of Citium
-3,zeno-elea,mock-wiki,MW-132157,Zeno of Elea
+tree_n,node_key,scope,target,label,filtered_label
+1,animal,mock-wiki,MW-000001,animal,
+1,animal,mock-thesaurus,300000001,animals (fauna),
+1,animal.mammal,mock-wiki,MW-000010,mammal,
+1,animal.mammal.dog,mock-wiki,MW-000144,dog,
+1,animal.mammal.dog,mock-thesaurus,300000144,dogs (species),
+1,animal.mammal.dog,mock-gazetteer,dog-0001,,
+1,animal.mammal.cat,mock-wiki,MW-000146,cat,
+1,animal.mammal.cat,mock-thesaurus,300000146,cats (species),
+1,animal.mammal.lion,mock-wiki,MW-000140,lion,
+1,animal.mammal.elephant,mock-wiki,MW-007378,elephant,
+1,animal.mammal.horse,mock-thesaurus,300000726,horses (species),
+1,animal.bird,mock-wiki,MW-005113,bird,
+1,animal.bird.eagle,mock-wiki,MW-002092,eagle,
+1,animal.bird.owl,mock-thesaurus,300000825,owls (birds),
+2,fruit,mock-wiki,MW-003314,fruit,
+2,fruit.pome.apple,mock-wiki,MW-000089,apple,
+2,fruit.pome.apple,mock-thesaurus,300000089,apples (fruit),
+2,fruit.citrus.orange,mock-wiki,MW-013191,orange,
+2,fruit.citrus.lemon,mock-wiki,MW-000500,"lemon, common",
+2,vegetable.root.carrot,mock-thesaurus,300081967,carrots (vegetable),
+2,legume.bean.chickpea,mock-wiki,MW-081375,chickpea,
+3,aristotle,mock-viaf,900000001,"Aristotle, 384-322 BC",
+3,aristotle,mock-wiki,MW-000868,Aristotle,
+3,plato,mock-viaf,900000002,"Plato, 427-347 BC",
+3,plato,mock-wiki,MW-000859,Plato,
+3,plato,mock-thesaurus,300500859,,
+3,socrates,mock-viaf,900000003,"Socrates, 469-399 BC",
+3,socrates,mock-wiki,MW-000913,Socrates,
+3,epicurus,mock-viaf,900000004,Epicurus,
+3,heraclitus,mock-wiki,MW-041155,Heraclitus,
+3,pythagoras,mock-viaf,900000005,Pythagoras,
+3,zeno-citium,mock-wiki,MW-171303,Zeno of Citium,
+3,zeno-elea,mock-wiki,MW-132157,Zeno of Elea,
+3,aristotle,mock-alias,it,Aristòtele,
+3,plato,mock-alias,it,Platone,
+3,socrates,mock-alias,it,Socrate,
+3,epicurus,mock-alias,it,Epicuro,epicuro
+3,pythagoras,mock-alias,it,Pitàgora di Samo,pitagora di samo

@@ -62,10 +62,20 @@ public class TaxoNodeFilterBindingModel
     public string? AncestorKey { get; set; }
 
     /// <summary>
-    /// Any part of the node's filtered label.
+    /// Any part of the node's filtered label. When
+    /// <see cref="FilteredMappingLabel"/> is also set, the two criteria are
+    /// combined with OR.
     /// </summary>
     [MaxLength(1000)]
     public string? FilteredLabel { get; set; }
+
+    /// <summary>
+    /// Any part of the filtered label of any of the node's mappings. When
+    /// <see cref="FilteredLabel"/> is also set, a node matches if either its
+    /// own filtered label or that of any of its mappings matches.
+    /// </summary>
+    [MaxLength(500)]
+    public string? FilteredMappingLabel { get; set; }
 
     /// <summary>
     /// The flags to match.
@@ -99,8 +109,9 @@ public class TaxoNodeFilterBindingModel
     public bool IsRoot { get; set; }
 
     /// <summary>
-    /// When true and <see cref="FilteredLabel"/> is set, a node is included
-    /// if it directly matches the label OR if any of its descendants match.
+    /// When true and <see cref="FilteredLabel"/> and/or
+    /// <see cref="FilteredMappingLabel"/> are set, a node is included if it
+    /// directly matches the label(s) OR if any of its descendants match.
     /// </summary>
     public bool MatchDescendants { get; set; }
 
@@ -143,6 +154,7 @@ public class TaxoNodeFilterBindingModel
             ParentKey = ParentKey,
             AncestorKey = AncestorKey,
             FilteredLabel = FilteredLabel,
+            FilteredMappingLabel = FilteredMappingLabel,
             Flags = Flags,
             FlagMatchMode = FlagMatchMode,
             IsLeaf = IsLeaf,

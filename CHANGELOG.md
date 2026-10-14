@@ -1,5 +1,15 @@
 # History
 
+## 1.1.0
+
+- 2026-10-14: searchable mapping labels, to find nodes also via aliases stored as mappings.
+  - ⚠️ breaking changes:
+    - database schema: table `node_mapping` has a new `label_ix` column (filtered label), with a trigram index. Existing databases are automatically upgraded when the store is initialized, copying the label of existing mappings into it (see README).
+  - `TaxoNodeMapping` has a new `FilteredLabel` property. When not set, the store falls back to `Label`, as for nodes.
+  - `TaxoNodeFilter` has a new `FilteredMappingLabel` filter, matching any part of the filtered label of any mapping of the node. When `FilteredLabel` is also set, the two are combined with OR, so that a node matches via either its own label or any of its mapping labels. This is also honored by `MatchDescendants`.
+  - importer: `mappings.csv` has a new optional `filtered_label` column; when empty, it is generated from `label` like for nodes.
+  - API: `filteredLabel` in mapping models, `filteredMappingLabel` in nodes filter.
+
 ## 1.0.1
 
 - 2026-10-14: import `note` column from `nodes.csv` into `TaxoNode.Note`.

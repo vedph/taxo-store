@@ -1650,6 +1650,159 @@ fruits,Common Fruits,Common fruits classification
     }
 
     [Fact]
+    public async Task AddNodeAsync_MappingFilteredLabels_SavesThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = CreateMappedNode();
+        node.Mappings!.Add(new TaxoNodeMapping
+        {
+            Scope = "alias", Target = "1", Label = "Golang",
+            FilteredLabel = "golang"
+        });
+        int id = await store.AddNodeAsync(node);
+
+        IList<TaxoNodeMapping> mappings =
+            (await store.GetNodeAsync(id, true))!.Mappings!;
+        Assert.Equal(["alias", "viaf", "wikidata"],
+            mappings.Select(m => m.Scope));
+        // explicit
+        Assert.Equal("golang", mappings[0].FilteredLabel);
+        // no label: no filtered label
+        Assert.Null(mappings[1].FilteredLabel);
+        // falls back to label
+        Assert.Equal("Go", mappings[2].FilteredLabel);
+    }
+
+    // languages: prog > oop > csharp, java; prog > func > haskell
+    private static async Task AddJavaAliasAsync(PgSqlTaxoStore store)
+    {
+        TaxoNode java = (await store.GetNodeAsync(5))!;
+        java.Mappings =
+        [
+            new TaxoNodeMapping
+            {
+                Scope = "alias", Target = "1", Label = "Giava",
+                FilteredLabel = "giava"
+            },
+            new TaxoNodeMapping { Scope = "viaf", Target = "456" }
+        ];
+        await store.AddNodeAsync(java);
+    }
+
+    [Theory]
+    // mapping label only
+    [InlineData(null, "giav", "java")]
+    [InlineData(null, "jav", "")]
+    // node label only: mappings are not searched
+    [InlineData("giav", null, "")]
+    [InlineData("jav", null, "java")]
+    // both: either node or mapping label (OR)
+    [InlineData("giav", "giav", "java")]
+    [InlineData("jav", "jav", "java")]
+    [InlineData("a", "a", "haskell java")]
+    [InlineData("x", "x", "")]
+    // LIKE wildcards are matched literally
+    [InlineData("%", "%", "")]
+    public async Task GetNodesAsync_FilteredMappingLabel_MatchesNodeOrMapping(
+        string? label, string? mappingLabel, string expected)
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await AddJavaAliasAsync(store);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(new TaxoNodeFilter
+        {
+            PageSize = 0,
+            TreeId = "languages",
+            IsLeaf = true,
+            FilteredLabel = label,
+            FilteredMappingLabel = mappingLabel
+        });
+
+        Assert.Equal(expected, string.Join(" ",
+            page.Items.Select(n => n.Key)));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_FilteredMappingLabel_CombinesWithOthers()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await AddJavaAliasAsync(store);
+
+        async Task<string> GetKeys(TaxoNodeFilter filter)
+        {
+            filter.PageSize = 0;
+            filter.FilteredLabel = filter.FilteredMappingLabel = "giav";
+            return string.Join(" ",
+                (await store.GetNodesAsync(filter)).Items.Select(n => n.Key));
+        }
+
+        // other criteria are still combined with AND
+        Assert.Equal("java", await GetKeys(new TaxoNodeFilter()));
+        Assert.Equal("", await GetKeys(new TaxoNodeFilter
+        {
+            TreeId = "fruits"
+        }));
+        Assert.Equal("java", await GetKeys(new TaxoNodeFilter
+        {
+            ParentKey = "oop"
+        }));
+        Assert.Equal("", await GetKeys(new TaxoNodeFilter
+        {
+            ParentKey = "func"
+        }));
+        Assert.Equal("java", await GetKeys(new TaxoNodeFilter
+        {
+            AncestorKey = "prog", MappingScope = "viaf"
+        }));
+        Assert.Equal("", await GetKeys(new TaxoNodeFilter
+        {
+            MappingScope = "getty"
+        }));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_FilteredMappingLabelMatchDescendants_Ok()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await AddJavaAliasAsync(store);
+        int progId = (await store.GetNodeFromKeyAsync("languages", "prog"))!.Id;
+
+        async Task<string> GetKeys(TaxoNodeFilter filter)
+        {
+            filter.PageSize = 0;
+            filter.TreeId = "languages";
+            filter.MatchDescendants = true;
+            return string.Join(" ",
+                (await store.GetNodesAsync(filter)).Items.Select(n => n.Key));
+        }
+
+        // matched only via the alias of java
+        Assert.Equal("prog", await GetKeys(new TaxoNodeFilter
+        {
+            IsRoot = true,
+            FilteredLabel = "giav",
+            FilteredMappingLabel = "giav"
+        }));
+        Assert.Equal("oop", await GetKeys(new TaxoNodeFilter
+        {
+            ParentId = progId,
+            FilteredMappingLabel = "giav"
+        }));
+        Assert.Equal("", await GetKeys(new TaxoNodeFilter
+        {
+            ParentId = progId,
+            FilteredLabel = "giav"
+        }));
+        // matched via node labels (haskell) or the alias (java)
+        Assert.Equal("func oop", await GetKeys(new TaxoNodeFilter
+        {
+            ParentId = progId,
+            FilteredLabel = "ask",
+            FilteredMappingLabel = "giav"
+        }));
+    }
+
+    [Fact]
     public async Task DeleteNodeAsync_DeletesItsMappings()
     {
         using PgSqlTaxoStore store = CreateStoreAsync(false);
@@ -1723,12 +1876,49 @@ colors,Colors,A list,true
         Assert.Equal(["viaf:123", "wikidata:Q79872"],
             oop.Mappings!.Select(m => $"{m.Scope}:{m.Target}"));
         Assert.Null(oop.Mappings![0].Label);
+        Assert.Null(oop.Mappings![0].FilteredLabel);
         Assert.Equal("object-oriented programming", oop.Mappings[1].Label);
+        Assert.Equal("object-oriented programming",
+            oop.Mappings[1].FilteredLabel);
+
+        // filtered label is computed from label when missing
+        Assert.Equal("red color", Assert.Single((await store
+            .GetNodeFromKeyAsync("colors", "red", true))!.Mappings!)
+            .FilteredLabel);
 
         Assert.Equal("300126225", Assert.Single((await store
             .GetNodeFromKeyAsync("colors", "red", true))!.Mappings!).Target);
         Assert.Empty((await store.GetNodeFromKeyAsync(
             "colors", "green", true))!.Mappings!);
+    }
+
+    [Fact]
+    public async Task ImportAsync_MappingFilteredLabels_ImportsThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        await importer.ImportAsync(
+            new StringReader(FLAT_TREES_CSV),
+            new StringReader(FLAT_NODES_CSV),
+            new StringReader(
+                "tree_n,node_key,scope,target,label,filtered_label\n" +
+                "1,oop,alias,1,Programmazione a Oggètti,\n" +
+                "1,oop,alias,2,OOP,object oriented\n" +
+                "1,oop,viaf,123,,\n"));
+
+        IList<TaxoNodeMapping> mappings = (await store.GetNodeFromKeyAsync(
+            "languages", "oop", true))!.Mappings!;
+        Assert.Equal(["programmazione a oggetti", "object oriented", null],
+            mappings.Select(m => m.FilteredLabel));
+
+        // the mapping filtered label is searchable
+        Assert.Equal("oop", Assert.Single((await store.GetNodesAsync(
+            new TaxoNodeFilter
+            {
+                FilteredLabel = "oggetti",
+                FilteredMappingLabel = "oggetti"
+            })).Items).Key);
     }
 
     [Fact]
@@ -1857,6 +2047,36 @@ colors,Colors,A list,true
         });
         await again.InitializeAsync();
         Assert.Equal(2, (await again.GetNodeAsync(id, true))!.Mappings!.Count);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_MappingsWithoutLabelIx_IsUpgraded()
+    {
+        string connectionString = string.Format(CS_TEMPLATE, DB_NAME);
+
+        // downgrade to the schema with mappings without filtered labels
+        using (PgSqlTaxoStore old = CreateStoreAsync(false))
+        {
+            await old.AddNodeAsync(CreateMappedNode());
+            await using NpgsqlConnection connection = new(connectionString);
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using NpgsqlCommand command = new(
+                "ALTER TABLE node_mapping DROP COLUMN label_ix;",
+                connection);
+            await command.ExecuteNonQueryAsync(
+                TestContext.Current.CancellationToken);
+        }
+        NpgsqlConnection.ClearAllPools();
+
+        using PgSqlTaxoStore store = new(new TaxoStoreOptions
+        {
+            Source = connectionString
+        });
+        await store.InitializeAsync();
+
+        // existing mapping labels are used as filtered labels
+        Assert.Equal("go", Assert.Single((await store.GetNodesAsync(
+            new TaxoNodeFilter { FilteredMappingLabel = "go" })).Items).Key);
     }
     #endregion
 }
