@@ -1286,6 +1286,40 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     }
 
     /// <summary>
+    /// Validates that none of the specified nodes, when updating an existing
+    /// node, changes its key. Once a node exists, its key is immutable,
+    /// because external data (e.g. Cadmus parts) refer to nodes by tree ID
+    /// and key.
+    /// </summary>
+    /// <exception cref="ArgumentException">Key changed.</exception>
+    private static async Task ValidateKeysUnchangedAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction,
+        IList<TaxoNode> nodes)
+    {
+        List<TaxoNode> updated = [.. nodes.Where(n => n.Id > 0)];
+        if (updated.Count == 0) return;
+
+        const string sql =
+            "SELECT n.id, n.key, w.key FROM node n " +
+            "JOIN unnest(@ids, @keys) AS w(id, key) ON w.id = n.id " +
+            "WHERE n.key <> w.key LIMIT 1";
+
+        await using NpgsqlCommand command = new(sql, connection, transaction);
+        command.Parameters.AddWithValue("ids",
+            updated.Select(n => n.Id).ToArray());
+        command.Parameters.AddWithValue("keys",
+            updated.Select(n => n.Key).ToArray());
+
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
+        if (await reader.ReadAsync())
+        {
+            throw new ArgumentException(
+                $"The key of node {reader.GetInt32(0)} cannot be changed " +
+                $"(from \"{reader.GetString(1)}\" to \"{reader.GetString(2)}\")");
+        }
+    }
+
+    /// <summary>
     /// Validates the hierarchy of the specified (just written) nodes: each
     /// node must belong to the same tree of its parent and children, must
     /// not be its own ancestor, and must have no parent in a flat tree.
@@ -1355,6 +1389,7 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
     /// <summary>
     /// Adds a new node (when its ID is 0) or updates an existing one (when
     /// its ID is greater than 0; if not found, it is added with that ID).
+    /// The key of an existing node cannot be changed.
     /// When the node's mappings are not null, they replace all the mappings
     /// of that node; when null, its mappings are left untouched.
     /// </summary>
@@ -1392,6 +1427,8 @@ public sealed class PgSqlTaxoStore : ITaxoStore, IDisposable
 
         try
         {
+            await ValidateKeysUnchangedAsync(connection, transaction, list);
+
             List<int> ids = new(list.Count);
 
             // send upserts in batches to minimize round trips

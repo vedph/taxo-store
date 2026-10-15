@@ -82,6 +82,8 @@ Trees have a unique string key (ID) that can be used to reference them externall
 
 So, a node key is granted to be unique only within its tree, not globally. If you want to have a globally unique node key (besides its numeric ID, which is internal to the database), you need to prefix it with the tree key followed by some separator, like a slash or a dot.
 
+Because keys are the identifiers used by external data (for instance, the Cadmus `TaxoStoreNodesPart` stores node keys), **the key of an existing node cannot be changed**: saving a node whose numeric ID already exists with a different key is rejected (`ArgumentException` in the store, 400 in the API). To "rename" a key, add a new node and delete the old one, updating any external references.
+
 ## Projects
 
 - `TaxoStore.Core`: core interfaces and models.

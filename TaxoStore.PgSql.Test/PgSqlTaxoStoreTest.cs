@@ -1102,6 +1102,40 @@ fruits,Common Fruits,Common fruits classification
     }
 
     [Fact]
+    public async Task AddNodeAsync_ChangedKey_ThrowsArgumentAndKeepsNode()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = (await store.GetNodeAsync(5))!;
+        string key = node.Key;
+        node.Key = key + "-changed";
+        node.Label = "Changed";
+
+        ArgumentException ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => store.AddNodeAsync(node));
+
+        Assert.Contains("cannot be changed", ex.Message);
+        TaxoNode saved = (await store.GetNodeAsync(5))!;
+        Assert.Equal(key, saved.Key);
+        Assert.NotEqual("Changed", saved.Label);
+    }
+
+    [Fact]
+    public async Task AddNodesAsync_OneChangedKey_SavesNothing()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = (await store.GetNodeAsync(5))!;
+        string label = node.Label;
+        node.Label = "Changed";
+        TaxoNode other = (await store.GetNodeAsync(2))!;
+        other.Key += "-changed";
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => store.AddNodesAsync([node, other]));
+
+        Assert.Equal(label, (await store.GetNodeAsync(5))!.Label);
+    }
+
+    [Fact]
     public async Task AddNodeAsync_ExplicitNewId_AdvancesSequence()
     {
         using PgSqlTaxoStore store = CreateStoreAsync(false);

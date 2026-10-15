@@ -112,7 +112,8 @@ public interface ITaxoStore
     /// <summary>
     /// Adds a new node (when its ID is 0) or updates an existing one (when
     /// its ID is greater than 0; if no node with that ID exists, it is added
-    /// with that ID).
+    /// with that ID). The key of an existing node cannot be changed, because
+    /// it is used as a stable identifier by external data.
     /// </summary>
     /// <remarks>When the node's <see cref="TaxoNode.Mappings"/> are not null,
     /// they replace all the mappings of that node in the store (so, an empty
@@ -122,9 +123,9 @@ public interface ITaxoStore
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains the ID of the added or updated node.</returns>
     /// <exception cref="System.ArgumentException">Invalid node data, e.g.
-    /// missing tree or key, a parent belonging to another tree, a parent
-    /// which would create a cycle, a parent in a flat tree, or invalid or
-    /// duplicate mappings.</exception>
+    /// missing tree or key, a changed key of an existing node, a parent
+    /// belonging to another tree, a parent which would create a cycle, a
+    /// parent in a flat tree, or invalid or duplicate mappings.</exception>
     /// <exception cref="TaxoStoreConflictException">The node key is already
     /// used by another node in the same tree.</exception>
     public Task<int> AddNodeAsync(TaxoNode node);
@@ -147,8 +148,9 @@ public interface ITaxoStore
     /// <param name="nodes">The collection of <see cref="TaxoNode"/> objects to add.
     /// Each node must contain valid data required for insertion. If it has ID
     /// equal to 0, it will be added as a new node. Else, the existing node
-    /// with that ID will be updated, or added if not found. Mappings are
-    /// handled as in <see cref="AddNodeAsync(TaxoNode)"/>.</param>
+    /// with that ID will be updated (its key cannot be changed), or added if
+    /// not found. Mappings are handled as in
+    /// <see cref="AddNodeAsync(TaxoNode)"/>.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains a list of integers representing the identifiers assigned
     /// to the nodes (whether they were created or just updated), in the order

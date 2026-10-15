@@ -1,5 +1,9 @@
 # History
 
+## Unreleased
+
+- 2026-10-15: the key of an existing node is immutable: saving a node whose ID already exists with a different key throws `ArgumentException` (400 in the API), and nothing in that batch is saved. Keys are used by external data (e.g. `TaxoStoreNodesPart`) to refer to nodes.
+
 ## 1.1.0
 
 - 2026-10-14: searchable mapping labels, to find nodes also via aliases stored as mappings.
