@@ -78,7 +78,7 @@ public static class Program
                     "[{Level:u3}] {SourceContext} - {Message:lj}{NewLine}{Exception}",
                 FileRollingInterval = RollingInterval.Day,
                 RetainedFileCountLimit = 7,
-                UseSerilogConsoleSink = true,
+                UseSerilogConsoleSink = false,
 #if DEBUG
                 MinimumLevel = LogEventLevel.Debug
 #else

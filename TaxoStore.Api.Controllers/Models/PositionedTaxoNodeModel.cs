@@ -46,12 +46,6 @@ public class PositionedTaxoNodeModel
     /// </summary>
     public string FilteredLabel { get; set; } = "";
 
-    /// <summary>
-    /// Flags attached to this node. Each character in the string is a flag.
-    /// For instance, <c>o</c>=obsolete, <c>d</c>=draft, etc. The value of
-    /// each character is defined by consumer code.
-    /// </summary>
-    public string? Flags { get; set; }
 
     /// <summary>
     /// An optional note attached to this node.
@@ -63,6 +57,12 @@ public class PositionedTaxoNodeModel
     /// resources. This is null unless mappings were requested.
     /// </summary>
     public IList<TaxoNodeMapping>? Mappings { get; set; }
+
+    /// <summary>
+    /// The features of this node, in their insertion order. This is null
+    /// unless features were requested.
+    /// </summary>
+    public IList<TaxoNodeFeature>? Features { get; set; }
 
     /// <summary>
     /// The depth level (1-based). Root nodes have Y=1, their children Y=2, etc.

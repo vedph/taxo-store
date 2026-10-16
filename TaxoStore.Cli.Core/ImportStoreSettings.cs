@@ -51,6 +51,13 @@ public sealed class ImportStoreSettings : CommandSettings
     public string? MappingsPath { get; set; }
 
     /// <summary>
+    /// Path to the optional CSV file with node features.
+    /// </summary>
+    [CommandOption("-f|--features <FEATURES_CSV>")]
+    [Description("Path to the optional CSV file with node features.")]
+    public string? FeaturesPath { get; set; }
+
+    /// <summary>
     /// Validates the settings.
     /// </summary>
     public override ValidationResult Validate()
@@ -77,6 +84,12 @@ public sealed class ImportStoreSettings : CommandSettings
         {
             return ValidationResult.Error(
                 $"Mappings CSV file not found: {MappingsPath}");
+        }
+
+        if (!string.IsNullOrEmpty(FeaturesPath) && !File.Exists(FeaturesPath))
+        {
+            return ValidationResult.Error(
+                $"Features CSV file not found: {FeaturesPath}");
         }
 
         return ValidationResult.Success();

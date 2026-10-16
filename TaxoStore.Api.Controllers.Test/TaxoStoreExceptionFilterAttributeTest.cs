@@ -69,7 +69,8 @@ public sealed class TaxoStoreExceptionFilterAttributeTest
     {
         TaxoNodeFilter filter = new TaxoNodeFilterBindingModel().ToNodeFilter();
 
-        Assert.Equal(NodeFlagMatchMode.Any, filter.FlagMatchMode);
+        Assert.Equal(NodeFeatureMatchMode.All, filter.FeatureMatchMode);
+        Assert.Null(filter.Features);
         Assert.Equal(1, filter.PageNumber);
         Assert.Equal(20, filter.PageSize);
     }
@@ -87,8 +88,8 @@ public sealed class TaxoStoreExceptionFilterAttributeTest
             ParentKey = "pk",
             AncestorKey = "ak",
             FilteredLabel = "fl",
-            Flags = "ab",
-            FlagMatchMode = NodeFlagMatchMode.None,
+            Features = ["a", "b=1", "c~x=y", "", "=1"],
+            FeatureMatchMode = NodeFeatureMatchMode.None,
             IsLeaf = false,
             IsRoot = true,
             MatchDescendants = true
@@ -102,8 +103,16 @@ public sealed class TaxoStoreExceptionFilterAttributeTest
         Assert.Equal("pk", filter.ParentKey);
         Assert.Equal("ak", filter.AncestorKey);
         Assert.Equal("fl", filter.FilteredLabel);
-        Assert.Equal("ab", filter.Flags);
-        Assert.Equal(NodeFlagMatchMode.None, filter.FlagMatchMode);
+        // invalid features are dropped
+        Assert.Equal(["a", "b=1", "c~x=y"],
+            filter.Features!.Select(f => f.ToString()));
+        Assert.Null(filter.Features![0].Value);
+        Assert.Equal("1", filter.Features[1].Value);
+        Assert.False(filter.Features[1].IsPartial);
+        Assert.Equal("c", filter.Features[2].Name);
+        Assert.Equal("x=y", filter.Features[2].Value);
+        Assert.True(filter.Features[2].IsPartial);
+        Assert.Equal(NodeFeatureMatchMode.None, filter.FeatureMatchMode);
         Assert.False(filter.IsLeaf);
         Assert.True(filter.IsRoot);
         Assert.True(filter.MatchDescendants);

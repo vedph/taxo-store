@@ -82,7 +82,8 @@ public static class TaxoStoreServiceExtensions
         // apply default seed sources if not provided
         if (string.IsNullOrEmpty(options.SeedTreeSource) ||
             string.IsNullOrEmpty(options.SeedNodeSource) ||
-            string.IsNullOrEmpty(options.SeedMappingSource))
+            string.IsNullOrEmpty(options.SeedMappingSource) ||
+            string.IsNullOrEmpty(options.SeedFeatureSource))
         {
             // determine the seed folder directory
             string seedDir = Path.Combine(
@@ -112,6 +113,14 @@ public static class TaxoStoreServiceExtensions
                 string mappingsPath = Path.Combine(seedDir, "mappings.csv");
                 if (File.Exists(mappingsPath))
                     options.SeedMappingSource = mappingsPath;
+            }
+
+            // set default feature source if not provided but available
+            if (string.IsNullOrEmpty(options.SeedFeatureSource))
+            {
+                string featuresPath = Path.Combine(seedDir, "features.csv");
+                if (File.Exists(featuresPath))
+                    options.SeedFeatureSource = featuresPath;
             }
         }
 

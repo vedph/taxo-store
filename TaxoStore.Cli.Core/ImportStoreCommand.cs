@@ -59,7 +59,8 @@ public sealed class ImportStoreCommand : AsyncCommand<ImportStoreSettings>
             SeedSourceAsText = false,
             SeedTreeSource = settings.TreesPath,
             SeedNodeSource = settings.NodesPath,
-            SeedMappingSource = settings.MappingsPath
+            SeedMappingSource = settings.MappingsPath,
+            SeedFeatureSource = settings.FeaturesPath
         };
 
         ILogger<PgSqlTaxoStore> logger = LogService.CreateLogger<PgSqlTaxoStore>();
@@ -74,6 +75,11 @@ public sealed class ImportStoreCommand : AsyncCommand<ImportStoreSettings>
         {
             AnsiConsole.MarkupLine("  mappings:  [grey]{0}[/]",
                 settings.MappingsPath.EscapeMarkup());
+        }
+        if (!string.IsNullOrEmpty(settings.FeaturesPath))
+        {
+            AnsiConsole.MarkupLine("  features:  [grey]{0}[/]",
+                settings.FeaturesPath.EscapeMarkup());
         }
 
         try

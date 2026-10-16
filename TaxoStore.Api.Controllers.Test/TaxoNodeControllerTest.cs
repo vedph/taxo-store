@@ -26,13 +26,18 @@ languages,Programming Languages,
 ";
 
     // IDs: prog=1, oop=2, func=3, csharp=4, java=5, haskell=6
-    private const string NODES_CSV = @"tree_n,parent_key,key,label,filtered_label,flags
-1,,prog,Programming,programming,
-1,prog,oop,Object-Oriented,object oriented,
-1,prog,func,Functional,functional,
-1,oop,csharp,C#,c,d
-1,oop,java,Java,java,
-1,func,haskell,Haskell,haskell,o
+    private const string NODES_CSV = @"tree_n,parent_key,key,label,filtered_label
+1,,prog,Programming,programming
+1,prog,oop,Object-Oriented,object oriented
+1,prog,func,Functional,functional
+1,oop,csharp,C#,c
+1,oop,java,Java,java
+1,func,haskell,Haskell,haskell
+";
+
+    private const string FEATURES_CSV = @"tree_n,node_key,name,value
+1,csharp,status,draft
+1,haskell,status,obsolete
 ";
 
     private static readonly Lock _lockObject = new();
@@ -50,7 +55,8 @@ languages,Programming Languages,
                 Source = string.Format(CS_TEMPLATE, DB_NAME),
                 SeedSourceAsText = true,
                 SeedTreeSource = TREES_CSV,
-                SeedNodeSource = NODES_CSV
+                SeedNodeSource = NODES_CSV,
+                SeedFeatureSource = FEATURES_CSV
             });
             store.InitializeAsync().Wait();
             return store;
@@ -144,8 +150,8 @@ languages,Programming Languages,
             await controller.GetNodesAsync(new TaxoNodeFilterBindingModel
             {
                 AncestorKey = "prog",
-                Flags = "do",
-                FlagMatchMode = NodeFlagMatchMode.None
+                Features = ["status=draft", "status=obsolete"],
+                FeatureMatchMode = NodeFeatureMatchMode.None
             }));
 
         Assert.Equal(["func", "java", "oop"], page.Items.Select(n => n.Key));
@@ -369,6 +375,80 @@ languages,Programming Languages,
         model.Mappings = [];
         await controller.AddNodeAsync(model);
         Assert.Empty((await store.GetNodeAsync(5, true))!.Mappings!);
+    }
+
+    [Fact]
+    public async Task Features_AddAndGet_RoundTrip()
+    {
+        using PgSqlTaxoStore store = CreateStore();
+        TaxoNodeController controller = new(store);
+
+        TaxoNodeBindingModel model = new()
+        {
+            Id = 5,
+            TreeId = "languages",
+            ParentId = 2,
+            Key = "java",
+            Label = "Java",
+            Features =
+            [
+                new TaxoNodeFeatureBindingModel
+                {
+                    Name = "creator", Value = "James Gosling",
+                    FilteredValue = "james gosling"
+                },
+                new TaxoNodeFeatureBindingModel { Name = "year", Value = "1995" },
+                new TaxoNodeFeatureBindingModel { Name = "stable" }
+            ]
+        };
+        await controller.AddNodeAsync(model);
+
+        // single node: features only when requested
+        Assert.Null(GetValue<PositionedTaxoNodeModel>(
+            await controller.GetNodeAsync(5)).Features);
+        IList<TaxoNodeFeature> features = GetValue<PositionedTaxoNodeModel>(
+            await controller.GetNodeAsync(5, false, true)).Features!;
+        Assert.Equal(["creator=James Gosling", "year=1995", "stable="],
+            features.Select(f => f.ToString()));
+        Assert.Equal(["james gosling", "1995", ""],
+            features.Select(f => f.FilteredValue));
+        Assert.Equal(3, GetValue<PositionedTaxoNodeModel>(
+            await controller.GetNodeFromKeyAsync("languages", "java", false,
+                true)).Features!.Count);
+
+        // lists, with and without position
+        Assert.Equal([1, 3], GetValue<IList<TaxoNode>>(
+            await controller.GetChildNodesAsync(2, false, false, true))
+            .Select(n => n.Features!.Count));
+        Assert.Equal([1, 3], GetValue<IList<PositionedTaxoNodeModel>>(
+            await controller.GetChildNodesAsync(2, true, false, true))
+            .Select(n => n.Features!.Count));
+
+        // filter by features
+        DataPage<TaxoNode> page = GetValue<DataPage<TaxoNode>>(
+            await controller.GetNodesAsync(new TaxoNodeFilterBindingModel
+            {
+                Features = ["creator~gosling", "year=1995", "stable"],
+                IncludeFeatures = true
+            }));
+        Assert.Equal(3, Assert.Single(page.Items).Features!.Count);
+        page = GetValue<DataPage<TaxoNode>>(
+            await controller.GetNodesAsync(new TaxoNodeFilterBindingModel
+            {
+                Features = ["year=1996", "status=draft"],
+                FeatureMatchMode = NodeFeatureMatchMode.Any
+            }));
+        Assert.Equal("csharp", Assert.Single(page.Items).Key);
+
+        // omitted features are left untouched, empty ones are removed
+        model.Features = null;
+        await controller.AddNodeAsync(model);
+        Assert.Equal(3, (await store.GetNodeAsync(5, false, true))!
+            .Features!.Count);
+
+        model.Features = [];
+        await controller.AddNodeAsync(model);
+        Assert.Empty((await store.GetNodeAsync(5, false, true))!.Features!);
     }
 
     [Fact]

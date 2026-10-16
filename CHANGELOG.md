@@ -1,7 +1,16 @@
 # History
 
-## Unreleased
+## 2.0.0
 
+- 2026-10-16: generic node features replace node flags.
+  - ⚠️ breaking changes:
+    - database schema: table `node` no longer has a `flags` column, and there is a new `node_feature` table, with name=value pairs attached to nodes (more features with the same name are allowed). Existing databases are automatically upgraded when the store is initialized; existing flags are dropped (see README).
+    - `TaxoNode.Flags` was removed, replaced by `TaxoNode.Features` (a list of `TaxoNodeFeature` with `Name`, `Value`, and `FilteredValue`, which falls back to `Value` when not set). When saving a node, null features are left untouched, while non-null features (even when empty) replace all the features of that node. Features are fetched only when requested.
+    - `TaxoNodeFilter.Flags` and `FlagMatchMode` were removed, replaced by `Features` (a list of `TaxoNodeFeatureFilter`, each matching a feature by exact name and optionally by exact or partial filtered value) and `FeatureMatchMode` (`NodeFeatureMatchMode`, replacing `NodeFlagMatchMode`; its default is `All`, while it was `Any` for flags).
+    - `ITaxoStore`: all the methods returning nodes have a new optional `includeFeatures` parameter, after `includeMappings`. Consumer code is not affected, but other implementations of the interface must be updated.
+    - API: `flags` was removed from node models, and `flags`/`flagMatchMode` from nodes filter. Nodes have `features`, and the nodes filter has `features` (repeatable, with syntax `name`, `name=value` or `name~value`), `featureMatchMode`, and `includeFeatures`, which is also a new query parameter in all the endpoints returning nodes.
+    - `TaxoNodeFilter.MatchDescendants` now also applies to `Features`: a node is included when it or any of its descendants matches the features, together with the labels when also set (a matching node must match both by itself). Previously, it applied only to labels, while other criteria (like flags) were applied to the returned nodes only, so that in a filtered tree view a node not matching was hidden with all its matching descendants.
+    - importer: `nodes.csv` no longer has a `flags` column (it is ignored if present). There is a new optional `features.csv` source (`TaxoStoreOptions.SeedFeatureSource`, defaulting to `wwwroot/taxo/features.csv` in the API; `-f` option in `taxo-tool import-store`), whose `filtered_value` is generated from `value` like filtered labels, but keeping digits (`TaxoTreeImporter.FilterFeatureValue`).
 - 2026-10-15: the key of an existing node is immutable: saving a node whose ID already exists with a different key throws `ArgumentException` (400 in the API), and nothing in that batch is saved. Keys are used by external data (e.g. `TaxoStoreNodesPart`) to refer to nodes.
 
 ## 1.1.0

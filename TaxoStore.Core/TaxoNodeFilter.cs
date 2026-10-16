@@ -1,4 +1,5 @@
 ﻿using Fusi.Tools.Data;
+using System.Collections.Generic;
 using System.Text;
 
 namespace TaxoStore.Core;
@@ -56,17 +57,19 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
     public string? FilteredMappingLabel { get; set; }
 
     /// <summary>
-    /// The flags to match.
+    /// The features to match. Each criterion is matched by any feature of
+    /// the node having its name and, when specified, its (exact or partial)
+    /// value. Criteria are combined according to
+    /// <see cref="FeatureMatchMode"/>.
     /// </summary>
-    public string? Flags { get; set; }
+    public IList<TaxoNodeFeatureFilter>? Features { get; set; }
 
     /// <summary>
-    /// The mode used to match node flags against <see cref="Flags"/>.
-    /// The default is <see cref="NodeFlagMatchMode.Any"/>.
+    /// The mode used to combine the criteria in <see cref="Features"/>.
+    /// The default is <see cref="NodeFeatureMatchMode.All"/>.
     /// </summary>
-    /// <remarks>The selected match mode determines how node flags are compared
-    /// when performing flag-based operations.</remarks>
-    public NodeFlagMatchMode FlagMatchMode { get; set; } = NodeFlagMatchMode.Any;
+    public NodeFeatureMatchMode FeatureMatchMode { get; set; } =
+        NodeFeatureMatchMode.All;
 
     /// <summary>
     /// True to match only leaf nodes (=nodes with no children), false to match
@@ -81,12 +84,15 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
     public bool IsRoot { get; set; }
 
     /// <summary>
-    /// When true and <see cref="FilteredLabel"/> and/or
-    /// <see cref="FilteredMappingLabel"/> are set, a node is included if it
-    /// directly matches the label(s) OR if any of its descendants match.
-    /// Implemented via a reverse-recursive CTE that walks from matching nodes
-    /// up to their ancestors. This can be combined with
-    /// <see cref="AncestorKey"/>.
+    /// When true and <see cref="FilteredLabel"/>, <see cref="FilteredMappingLabel"/>
+    /// and/or <see cref="Features"/> are set, a node is included if it
+    /// directly matches these criteria OR if any of its descendants matches
+    /// them. A matching node must match all these criteria by itself (e.g.
+    /// a descendant matching the label and another one matching the
+    /// features do not make their ancestor match). All the other criteria
+    /// still apply to the included nodes themselves. Implemented via a
+    /// reverse-recursive CTE that walks from matching nodes up to their
+    /// ancestors. This can be combined with <see cref="AncestorKey"/>.
     /// </summary>
     public bool MatchDescendants { get; set; }
 
@@ -135,9 +141,11 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
               .Append(';');
         }
 
-        if (!string.IsNullOrEmpty(Flags))
-            sb.Append("Flags=").Append(Flags)
-              .Append('(').Append(FlagMatchMode).Append(");");
+        if (Features?.Count > 0)
+        {
+            sb.Append("Features=").AppendJoin(", ", Features)
+              .Append('(').Append(FeatureMatchMode).Append(");");
+        }
 
         if (IsLeaf != null)
             sb.Append("IsLeaf=").Append(IsLeaf).Append(';');
@@ -157,24 +165,22 @@ public class TaxoNodeFilter : PagingOptions, IPagingOptions
 }
 
 /// <summary>
-/// Specifies the modes used to determine how node flags are matched.
+/// Specifies the modes used to combine the criteria of a features filter
+/// (<see cref="TaxoNodeFilter.Features"/>).
 /// </summary>
-/// <remarks>Use this enumeration to control whether no flags, all specified
-/// flags, or any specified flag must be present when evaluating node flags.
-/// The selected mode affects how flag checks are performed in APIs that support
-/// flag-based filtering or selection.</remarks>
-public enum NodeFlagMatchMode
+public enum NodeFeatureMatchMode
 {
     /// <summary>
-    /// None of the specified flags must be present.
+    /// None of the criteria must be matched by any feature of the node.
     /// </summary>
     None,
     /// <summary>
-    /// All specified flags must be present.
+    /// Each criterion must be matched by a feature of the node (not
+    /// necessarily the same one).
     /// </summary>
     All,
     /// <summary>
-    /// At least one of the specified flags must be present.
+    /// At least one of the criteria must be matched by a feature of the node.
     /// </summary>
     Any
 }

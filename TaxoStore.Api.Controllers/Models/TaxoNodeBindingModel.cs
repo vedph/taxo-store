@@ -58,13 +58,6 @@ public class TaxoNodeBindingModel
     [MaxLength(1000)]
     public string? FilteredLabel { get; set; }
 
-    /// <summary>
-    /// Flags attached to this node. Each character in the string is a flag.
-    /// For instance, <c>o</c>=obsolete, <c>d</c>=draft, etc. The value of
-    /// each character is defined by consumer code.
-    /// </summary>
-    [MaxLength(50)]
-    public string? Flags { get; set; }
 
     /// <summary>
     /// An optional note attached to this node.
@@ -79,6 +72,14 @@ public class TaxoNodeBindingModel
     /// an empty array removes them all.
     /// </summary>
     public IList<TaxoNodeMappingBindingModel>? Mappings { get; set; }
+
+    /// <summary>
+    /// The features of this node, i.e. generic name=value attributes. When
+    /// null (or omitted), the features of the node are left untouched;
+    /// else, they replace all the features of the node, so that an empty
+    /// array removes them all.
+    /// </summary>
+    public IList<TaxoNodeFeatureBindingModel>? Features { get; set; }
 
     /// <summary>
     /// Creates a new <see cref="TaxoNode"/> instance that represents the current
@@ -96,10 +97,11 @@ public class TaxoNodeBindingModel
             Key = Key,
             Label = Label,
             FilteredLabel = FilteredLabel ?? Label,
-            Flags = Flags,
             Note = Note,
             Mappings = Mappings == null
-                ? null : [.. Mappings.Select(m => m.ToMapping())]
+                ? null : [.. Mappings.Select(m => m.ToMapping())],
+            Features = Features == null
+                ? null : [.. Features.Select(f => f.ToFeature())]
         };
     }
 }

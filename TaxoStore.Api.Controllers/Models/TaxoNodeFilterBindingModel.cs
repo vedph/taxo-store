@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.Linq;
 using TaxoStore.Core;
 
 namespace TaxoStore.Api.Controllers.Models;
@@ -10,7 +12,7 @@ namespace TaxoStore.Api.Controllers.Models;
 /// </summary>
 /// <remarks>This model is used to bind incoming filter parameters for node
 /// queries in API requests. It supports filtering by tree, parent, key, label,
-/// flags, and leaf status, as well as pagination through page number and page
+/// features, mappings and leaf status, as well as pagination through page number and page
 /// size. All properties are optional except for pagination parameters, which
 /// are required and validated for range. The filter can be converted to a
 /// domain-specific filter object using the ToNodeFilter method.</remarks>
@@ -78,18 +80,21 @@ public class TaxoNodeFilterBindingModel
     public string? FilteredMappingLabel { get; set; }
 
     /// <summary>
-    /// The flags to match.
+    /// The features to match, each as <c>name</c> (any value),
+    /// <c>name=value</c> (exact filtered value) or <c>name~value</c>
+    /// (any part of the filtered value). In a query string, repeat the
+    /// parameter for each feature (e.g. <c>features=a=1&amp;features=b</c>).
+    /// Invalid entries (empty or without name) are ignored.
     /// </summary>
-    [MaxLength(50)]
-    public string? Flags { get; set; }
+    [MaxLength(20)]
+    public IList<string>? Features { get; set; }
 
     /// <summary>
-    /// The mode used to match node flags against <see cref="Flags"/>:
-    /// any (default), all, or none of the specified flags.
+    /// The mode used to combine the criteria in <see cref="Features"/>:
+    /// all (default), any, or none of them must be matched.
     /// </summary>
-    /// <remarks>The selected match mode determines how node flags are compared
-    /// when performing flag-based operations.</remarks>
-    public NodeFlagMatchMode FlagMatchMode { get; set; } = NodeFlagMatchMode.Any;
+    public NodeFeatureMatchMode FeatureMatchMode { get; set; } =
+        NodeFeatureMatchMode.All;
 
     /// <summary>
     /// True to match only leaf nodes (=nodes with no children), false to match
@@ -109,9 +114,10 @@ public class TaxoNodeFilterBindingModel
     public bool IsRoot { get; set; }
 
     /// <summary>
-    /// When true and <see cref="FilteredLabel"/> and/or
-    /// <see cref="FilteredMappingLabel"/> are set, a node is included if it
-    /// directly matches the label(s) OR if any of its descendants match.
+    /// When true and <see cref="FilteredLabel"/>, <see cref="FilteredMappingLabel"/>
+    /// and/or <see cref="Features"/> are set, a node is included if it
+    /// directly matches these criteria OR if any of its descendants matches
+    /// all of them by itself.
     /// </summary>
     public bool MatchDescendants { get; set; }
 
@@ -137,6 +143,12 @@ public class TaxoNodeFilterBindingModel
     public bool IncludeMappings { get; set; }
 
     /// <summary>
+    /// If true, include the features of each node in the response.
+    /// Default is false for better performance.
+    /// </summary>
+    public bool IncludeFeatures { get; set; }
+
+    /// <summary>
     /// Creates a new <see cref="TaxoNodeFilter"/> instance populated with the
     /// current filter criteria.
     /// </summary>
@@ -155,8 +167,13 @@ public class TaxoNodeFilterBindingModel
             AncestorKey = AncestorKey,
             FilteredLabel = FilteredLabel,
             FilteredMappingLabel = FilteredMappingLabel,
-            Flags = Flags,
-            FlagMatchMode = FlagMatchMode,
+            Features = Features == null ? null :
+            [
+                .. Features.Select(TaxoNodeFeatureFilter.Parse)
+                    .Where(f => f != null)
+                    .Select(f => f!)
+            ],
+            FeatureMatchMode = FeatureMatchMode,
             IsLeaf = IsLeaf,
             IsRoot = IsRoot,
             MatchDescendants = MatchDescendants,

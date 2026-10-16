@@ -23,19 +23,30 @@ languages,Programming Languages,Programming languages taxonomy
 fruits,Common Fruits,Common fruits classification
 ";
 
-    private const string NODES_CSV = @"tree_n,parent_key,key,label,filtered_label,flags
-1,,prog,Programming,programming,
-1,prog,oop,Object-Oriented,object oriented,
-1,prog,func,Functional,functional,
-1,oop,csharp,C#,c,d
-1,oop,java,Java,java,
-1,func,haskell,Haskell,haskell,o
-2,,fruit,Fruits,fruits,
-2,fruit,citrus,Citrus,citrus,
-2,fruit,berry,Berries,berries,
-2,citrus,orange,Orange,orange,
-2,citrus,lemon,Lemon,lemon,
-2,berry,strawberry,Strawberry,strawberry,
+    private const string NODES_CSV = @"tree_n,parent_key,key,label,filtered_label
+1,,prog,Programming,programming
+1,prog,oop,Object-Oriented,object oriented
+1,prog,func,Functional,functional
+1,oop,csharp,C#,c
+1,oop,java,Java,java
+1,func,haskell,Haskell,haskell
+2,,fruit,Fruits,fruits
+2,fruit,citrus,Citrus,citrus
+2,fruit,berry,Berries,berries
+2,citrus,orange,Orange,orange
+2,citrus,lemon,Lemon,lemon
+2,berry,strawberry,Strawberry,strawberry
+";
+
+    // filtered values are computed from values when empty
+    private const string FEATURES_CSV = @"tree_n,node_key,name,value,filtered_value
+1,csharp,status,Draft,
+1,csharp,paradigm,Object-Oriented,
+1,csharp,paradigm,Functional,
+1,haskell,status,obsolete,
+1,haskell,paradigm,Functional,
+1,java,year,1995,
+1,java,paradigm,Object-Oriented,
 ";
 
     private static readonly Lock _lockObject = new();
@@ -78,7 +89,8 @@ fruits,Common Fruits,Common fruits classification
                 Source = connectionString,
                 SeedSourceAsText = !useEmptySources,
                 SeedTreeSource = useEmptySources ? null : TREES_CSV,
-                SeedNodeSource = useEmptySources ? null : NODES_CSV
+                SeedNodeSource = useEmptySources ? null : NODES_CSV,
+                SeedFeatureSource = useEmptySources ? null : FEATURES_CSV
             };
 
             PgSqlTaxoStore store = new(options);
@@ -218,7 +230,7 @@ fruits,Common Fruits,Common fruits classification
         Assert.Equal("csharp", node.Key);
         Assert.Equal("C#", node.Label);
         Assert.Equal("languages", node.TreeId);
-        Assert.Equal("d", node.Flags);
+        Assert.Null(node.Features);
     }
 
     [Fact]
@@ -283,7 +295,7 @@ fruits,Common Fruits,Common fruits classification
             Key = "cpp",
             Label = "C++",
             FilteredLabel = "c",
-            Flags = "d"
+            Features = [new TaxoNodeFeature { Name = "status", Value = "draft" }]
         };
 
         int id = await store.AddNodeAsync(node);
@@ -380,21 +392,25 @@ fruits,Common Fruits,Common fruits classification
     }
 
     [Fact]
-    public async Task GetNodesAsync_FilterByFlagsAll_ReturnsMatchingNodes()
+    public async Task GetNodesAsync_FilterByFeature_ReturnsMatchingNodes()
     {
         using PgSqlTaxoStore store = CreateStoreAsync(false);
         TaxoNodeFilter filter = new()
         {
             PageNumber = 1,
             PageSize = 100,
-            Flags = "d",
-            FlagMatchMode = NodeFlagMatchMode.All
+            Features = [new TaxoNodeFeatureFilter
+            {
+                Name = "status", Value = "draft"
+            }]
         };
 
-        DataPage<TaxoNode> page = await store.GetNodesAsync(filter);
+        DataPage<TaxoNode> page = await store.GetNodesAsync(filter, false,
+            true);
 
-        Assert.True(page.Total >= 1);
-        Assert.All(page.Items, n => Assert.Contains('d', n.Flags ?? ""));
+        TaxoNode node = Assert.Single(page.Items);
+        Assert.Equal("csharp", node.Key);
+        Assert.Contains(node.Features!, f => f.ToString() == "status=Draft");
     }
 
     [Fact]
@@ -687,9 +703,9 @@ fruits,Common Fruits,Common fruits classification
     #endregion
 
     #region Node Query Tests
-    // seed IDs: languages: prog=1, oop=2, func=3, csharp=4 (d), java=5,
-    // haskell=6 (o); fruits: fruit=7, citrus=8, berry=9, orange=10,
-    // lemon=11, strawberry=12
+    // seed IDs: languages: prog=1, oop=2, func=3, csharp=4 (status=Draft),
+    // java=5 (year=1995), haskell=6 (status=obsolete); fruits: fruit=7,
+    // citrus=8, berry=9, orange=10, lemon=11, strawberry=12
 
     private static TaxoNodeFilter AllNodes(Action<TaxoNodeFilter>? set = null)
     {
@@ -757,10 +773,11 @@ fruits,Common Fruits,Common fruits classification
         {
             f.AncestorKey = "prog";
             f.IsLeaf = true;
-            f.Flags = "d";
+            f.Features = [new TaxoNodeFeatureFilter { Name = "status" }];
+            f.FeatureMatchMode = NodeFeatureMatchMode.None;
         }));
 
-        Assert.Equal(["csharp"], Keys(page));
+        Assert.Equal(["java"], Keys(page));
         Assert.Equal(1, page.Total);
     }
 
@@ -845,47 +862,201 @@ fruits,Common Fruits,Common fruits classification
         Assert.Equal(["func", "oop", "prog"], Keys(page));
     }
 
+    // features are separated by | and parsed with TaxoNodeFeatureFilter
     [Theory]
-    [InlineData(NodeFlagMatchMode.Any, "do", new[] { "csharp", "haskell" })]
-    [InlineData(NodeFlagMatchMode.All, "d", new[] { "csharp" })]
-    [InlineData(NodeFlagMatchMode.All, "do", new string[0])]
-    [InlineData(NodeFlagMatchMode.None, "do",
+    [InlineData(NodeFeatureMatchMode.Any, "status=draft|status=obsolete",
+        new[] { "csharp", "haskell" })]
+    [InlineData(NodeFeatureMatchMode.All, "status=draft",
+        new[] { "csharp" })]
+    [InlineData(NodeFeatureMatchMode.All, "status=draft|status=obsolete",
+        new string[0])]
+    // the same name can be matched by different features of the same node
+    [InlineData(NodeFeatureMatchMode.All,
+        "paradigm=functional|paradigm=object-oriented", new[] { "csharp" })]
+    [InlineData(NodeFeatureMatchMode.All, "paradigm=functional",
+        new[] { "csharp", "haskell" })]
+    // exact value: no partial match
+    [InlineData(NodeFeatureMatchMode.All, "paradigm=func", new string[0])]
+    [InlineData(NodeFeatureMatchMode.All, "paradigm~FUNC",
+        new[] { "csharp", "haskell" })]
+    [InlineData(NodeFeatureMatchMode.All, "status", new[] { "csharp", "haskell" })]
+    [InlineData(NodeFeatureMatchMode.All, "year=1995", new[] { "java" })]
+    [InlineData(NodeFeatureMatchMode.All, "year~99", new[] { "java" })]
+    [InlineData(NodeFeatureMatchMode.All, "status|year", new string[0])]
+    [InlineData(NodeFeatureMatchMode.Any, "status|year",
+        new[] { "csharp", "haskell", "java" })]
+    [InlineData(NodeFeatureMatchMode.None, "status",
         new[] { "func", "java", "oop", "prog" })]
-    public async Task GetNodesAsync_Flags_MatchesByMode(NodeFlagMatchMode mode,
-        string flags, string[] expected)
+    [InlineData(NodeFeatureMatchMode.None, "status=obsolete|year",
+        new[] { "csharp", "func", "oop", "prog" })]
+    // names are case-sensitive
+    [InlineData(NodeFeatureMatchMode.All, "Status", new string[0])]
+    public async Task GetNodesAsync_Features_MatchesByMode(
+        NodeFeatureMatchMode mode, string features, string[] expected)
     {
         using PgSqlTaxoStore store = CreateStoreAsync(false);
 
         DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
         {
             f.TreeId = "languages";
-            f.Flags = flags;
-            f.FlagMatchMode = mode;
+            f.Features = [.. features.Split('|')
+                .Select(s => TaxoNodeFeatureFilter.Parse(s)!)];
+            f.FeatureMatchMode = mode;
         }));
 
         Assert.Equal(expected, Keys(page));
     }
 
     [Fact]
-    public async Task GetNodesAsync_SpecialAndRepeatedFlags_Work()
+    public async Task GetNodesAsync_FeatureValueWildcards_AreLiteral()
     {
         using PgSqlTaxoStore store = CreateStoreAsync(false);
         await store.AddNodeAsync(new TaxoNode
         {
             TreeId = "languages", ParentId = 1, Key = "rust",
-            Label = "Rust", FilteredLabel = "rust", Flags = "-%"
+            Label = "Rust", FilteredLabel = "rust",
+            Features = [new TaxoNodeFeature { Name = "code", Value = "a_b%" }]
         });
+
+        async Task<string[]> GetKeys(string feature) =>
+            Keys(await store.GetNodesAsync(AllNodes(f => f.Features =
+                [TaxoNodeFeatureFilter.Parse(feature)!])));
+
+        Assert.Equal(["rust"], await GetKeys("code~_b%"));
+        Assert.Equal(["rust"], await GetKeys("code=a_b%"));
+        // _ and % are not LIKE wildcards
+        Assert.Empty(await GetKeys("code~a%"));
+        Assert.Empty(await GetKeys("code~x_b"));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_FeaturesWithOtherFilters_CombinesThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
 
         DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
         {
-            f.Flags = "%%-";
-            f.FlagMatchMode = NodeFlagMatchMode.All;
+            f.FilteredLabel = "a";
+            f.Features =
+            [
+                new TaxoNodeFeatureFilter
+                {
+                    Name = "paradigm", Value = "object-oriented"
+                }
+            ];
         }));
-        Assert.Equal(["rust"], Keys(page));
 
-        // flags are not LIKE wildcards
-        page = await store.GetNodesAsync(AllNodes(f => f.Flags = "_"));
-        Assert.Empty(page.Items);
+        // java matches both; csharp has no "a" in its label, and oop has
+        // no features
+        Assert.Equal(["java"], Keys(page));
+        Assert.Equal(1, page.Total);
+    }
+
+    // features are separated by | and parsed with TaxoNodeFeatureFilter;
+    // seed: prog > oop > csharp (status=Draft), java (year=1995);
+    // prog > func > haskell (status=obsolete)
+    [Theory]
+    // roots having a descendant with the feature
+    [InlineData(null, true, "status", NodeFeatureMatchMode.All,
+        new[] { "prog" })]
+    [InlineData(null, true, "color", NodeFeatureMatchMode.All, new string[0])]
+    // children of prog: oop via csharp, func via haskell
+    [InlineData(1, false, "status", NodeFeatureMatchMode.All,
+        new[] { "func", "oop" })]
+    [InlineData(1, false, "status=obsolete", NodeFeatureMatchMode.All,
+        new[] { "func" })]
+    // the matching node itself is included
+    [InlineData(2, false, "year", NodeFeatureMatchMode.All, new[] { "java" })]
+    [InlineData(1, false, "year|status=obsolete", NodeFeatureMatchMode.Any,
+        new[] { "func", "oop" })]
+    // all criteria must be matched by the same node
+    [InlineData(1, false, "year|status", NodeFeatureMatchMode.All,
+        new string[0])]
+    // none: func matches by itself, oop via java
+    [InlineData(1, false, "status", NodeFeatureMatchMode.None,
+        new[] { "func", "oop" })]
+    [InlineData(2, false, "status", NodeFeatureMatchMode.None,
+        new[] { "java" })]
+    public async Task GetNodesAsync_FeaturesMatchDescendants_IncludesAncestors(
+        int? parentId, bool isRoot, string features, NodeFeatureMatchMode mode,
+        string[] expected)
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.TreeId = "languages";
+            f.ParentId = parentId;
+            f.IsRoot = isRoot;
+            f.MatchDescendants = true;
+            f.Features = [.. features.Split('|')
+                .Select(s => TaxoNodeFeatureFilter.Parse(s)!)];
+            f.FeatureMatchMode = mode;
+        }));
+
+        Assert.Equal(expected, Keys(page));
+        Assert.Equal(expected.Length, page.Total);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_LabelAndFeaturesMatchDescendants_SameNode()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        async Task<string[]> GetKeys(string label, string feature) =>
+            Keys(await store.GetNodesAsync(AllNodes(f =>
+            {
+                f.TreeId = "languages";
+                f.IsRoot = true;
+                f.FilteredLabel = label;
+                f.FilteredMappingLabel = label;
+                f.MatchDescendants = true;
+                f.Features = [TaxoNodeFeatureFilter.Parse(feature)!];
+            })));
+
+        // haskell matches both
+        Assert.Equal(["prog"], await GetKeys("haskell", "status=obsolete"));
+        // haskell matches the label and csharp the feature: no match
+        Assert.Empty(await GetKeys("haskell", "status=draft"));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_LabelAndFeaturesMatchDescendants_ReturnsAncestors()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.FilteredLabel = "a";
+            f.MatchDescendants = true;
+            f.Features =
+            [
+                new TaxoNodeFeatureFilter
+                {
+                    Name = "paradigm", Value = "object-oriented"
+                }
+            ];
+        }));
+
+        // java matches both, so its ancestors are included, even if they
+        // have no features
+        Assert.Equal(["java", "oop", "prog"], Keys(page));
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_AncestorKeyAndFeaturesMatchDescendants_Ok()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        DataPage<TaxoNode> page = await store.GetNodesAsync(AllNodes(f =>
+        {
+            f.AncestorKey = "prog";
+            f.MatchDescendants = true;
+            f.Features = [TaxoNodeFeatureFilter.Parse("year=1995")!];
+        }));
+
+        // prog itself is not a descendant of prog
+        Assert.Equal(["java", "oop"], Keys(page));
     }
 
     [Fact]
@@ -1090,14 +1261,14 @@ fruits,Common Fruits,Common fruits classification
         using PgSqlTaxoStore store = CreateStoreAsync(false);
         TaxoNode node = (await store.GetNodeAsync(5))!;
         node.Label = "Java!";
-        node.Flags = "x";
+        node.Features = [new TaxoNodeFeature { Name = "x" }];
 
         int id = await store.AddNodeAsync(node);
 
         Assert.Equal(5, id);
-        TaxoNode saved = (await store.GetNodeAsync(5))!;
+        TaxoNode saved = (await store.GetNodeAsync(5, false, true))!;
         Assert.Equal("Java!", saved.Label);
-        Assert.Equal("x", saved.Flags);
+        Assert.Equal("x=", Assert.Single(saved.Features!).ToString());
         Assert.Equal(2, saved.ParentId);
     }
 
@@ -1868,6 +2039,262 @@ fruits,Common Fruits,Common fruits classification
     }
     #endregion
 
+    #region Feature Tests
+    private static TaxoNode CreateFeaturedNode(string key = "go") => new()
+    {
+        TreeId = "languages", ParentId = 1, Key = key, Label = key,
+        Features =
+        [
+            new TaxoNodeFeature { Name = "son", Value = "Mark" },
+            new TaxoNodeFeature { Name = "age", Value = "16" },
+            new TaxoNodeFeature
+            {
+                Name = "son", Value = "Jane", FilteredValue = "jane"
+            },
+            new TaxoNodeFeature { Name = "obsolete" }
+        ]
+    };
+
+    [Fact]
+    public async Task AddNodeAsync_WithFeatures_SavesThemInOrder()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        int id = await store.AddNodeAsync(CreateFeaturedNode());
+
+        // not requested: null
+        Assert.Null((await store.GetNodeAsync(id))!.Features);
+
+        // requested: in their order, with filtered values falling back to
+        // values
+        TaxoNode node = (await store.GetNodeAsync(id, false, true))!;
+        Assert.Null(node.Mappings);
+        Assert.Equal(["son=Mark", "age=16", "son=Jane", "obsolete="],
+            node.Features!.Select(f => f.ToString()));
+        Assert.Equal(["Mark", "16", "jane", ""],
+            node.Features!.Select(f => f.FilteredValue));
+    }
+
+    [Fact]
+    public async Task GetNodeAsync_IncludeFeaturesWithoutFeatures_ReturnsEmpty()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        TaxoNode node = (await store.GetNodeAsync(2, false, true))!;
+
+        Assert.NotNull(node.Features);
+        Assert.Empty(node.Features);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_NullFeatures_KeepsFeatures()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateFeaturedNode());
+
+        // update the node as read without its features
+        TaxoNode node = (await store.GetNodeAsync(id))!;
+        node.Label = "Go!";
+        await store.AddNodeAsync(node);
+
+        node = (await store.GetNodeAsync(id, false, true))!;
+        Assert.Equal("Go!", node.Label);
+        Assert.Equal(4, node.Features!.Count);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_EmptyFeatures_RemovesFeatures()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateFeaturedNode());
+
+        TaxoNode node = (await store.GetNodeAsync(id))!;
+        node.Features = [];
+        await store.AddNodeAsync(node);
+
+        Assert.Empty((await store.GetNodeAsync(id, false, true))!.Features!);
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_NewFeatures_ReplaceOldOnes()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateFeaturedNode());
+
+        TaxoNode node = (await store.GetNodeAsync(id, false, true))!;
+        node.Features = [node.Features![3], node.Features[0]];
+        await store.AddNodeAsync(node);
+
+        Assert.Equal(["obsolete=", "son=Mark"],
+            (await store.GetNodeAsync(id, false, true))!.Features!
+            .Select(f => f.ToString()));
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_DuplicateFeatures_AreAllowed()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = CreateFeaturedNode();
+        node.Features =
+        [
+            new TaxoNodeFeature { Name = "son", Value = "Mark" },
+            new TaxoNodeFeature { Name = "son", Value = "Mark" }
+        ];
+
+        int id = await store.AddNodeAsync(node);
+
+        Assert.Equal(2, (await store.GetNodeAsync(id, false, true))!
+            .Features!.Count);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("a=b")]
+    [InlineData("a~b")]
+    [InlineData("123456789012345678901234567890123456789012345678901")]
+    public async Task AddNodeAsync_InvalidFeature_ThrowsArgumentAndRollsBack(
+        string name)
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = CreateFeaturedNode();
+        node.Features!.Add(new TaxoNodeFeature { Name = name, Value = "x" });
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(node));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("languages", "go"));
+    }
+
+    [Fact]
+    public async Task AddNodeAsync_TooLongFeatureValue_ThrowsArgument()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode node = CreateFeaturedNode();
+        node.Features![0].Value = new string('x', 501);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.AddNodeAsync(node));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("languages", "go"));
+    }
+
+    [Fact]
+    public async Task AddNodesAsync_FeaturesOfManyNodes_AreSavedPerNode()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        TaxoNode rust = CreateFeaturedNode("rust");
+        rust.Features = [new TaxoNodeFeature { Name = "year", Value = "2015" }];
+
+        IList<int> ids = await store.AddNodesAsync(
+            [CreateFeaturedNode("go"), rust]);
+
+        Assert.Equal(4, (await store.GetNodeAsync(ids[0], false, true))!
+            .Features!.Count);
+        Assert.Equal("year=2015", Assert.Single(
+            (await store.GetNodeAsync(ids[1], false, true))!.Features!)
+            .ToString());
+    }
+
+    [Fact]
+    public async Task NodeLists_IncludeFeatures_ReturnFeatures()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateFeaturedNode());
+        int childId = await store.AddNodeAsync(new TaxoNode
+        {
+            TreeId = "languages", ParentId = id, Key = "tinygo",
+            Label = "TinyGo"
+        });
+
+        // page: features and mappings are independent
+        DataPage<TaxoNode> page = await store.GetNodesAsync(
+            new TaxoNodeFilter { TreeId = "languages", ParentId = 1 },
+            false, true);
+        Assert.Equal([0, 4, 0], page.Items.Select(n => n.Features!.Count));
+        Assert.All(page.Items, n => Assert.Null(n.Mappings));
+        page = await store.GetNodesAsync(
+            new TaxoNodeFilter { TreeId = "languages", ParentId = 1 },
+            true, true);
+        Assert.All(page.Items, n => Assert.NotNull(n.Mappings));
+        Assert.All((await store.GetNodesAsync(
+            new TaxoNodeFilter { TreeId = "languages" })).Items,
+            n => Assert.Null(n.Features));
+
+        // roots
+        Assert.All((await store.GetRootNodes("languages",
+            new PagingOptions { PageSize = 0 }, false, true)).Items,
+            n => Assert.Empty(n.Features!));
+
+        // children
+        Assert.Equal(4, (await store.GetChildNodesAsync(1, false, true))
+            .Single(n => n.Id == id).Features!.Count);
+
+        // descendants
+        Assert.Equal(4, (await store.GetDescendantNodesAsync(1, false, true))
+            .Single(n => n.Id == id).Features!.Count);
+
+        // ancestors
+        Assert.Equal([4, 0], (await store.GetAncestorNodesAsync(
+            childId, false, true)).Select(n => n.Features!.Count));
+
+        // by key
+        Assert.Equal(4, (await store.GetNodeFromKeyAsync(
+            "languages", "go", false, true))!.Features!.Count);
+    }
+
+    [Fact]
+    public async Task GetNodesAsync_FeatureValue_IsMatchedOnFilteredValue()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        await store.AddNodeAsync(CreateFeaturedNode());
+
+        async Task<string[]> GetKeys(string feature) =>
+            Keys(await store.GetNodesAsync(AllNodes(f => f.Features =
+                [TaxoNodeFeatureFilter.Parse(feature)!])));
+
+        // Jane has filtered value jane, Mark has none (=Mark)
+        Assert.Equal(["go"], await GetKeys("son=jane"));
+        Assert.Empty(await GetKeys("son=Jane"));
+        Assert.Equal(["go"], await GetKeys("son=Mark"));
+        // partial matches are case-insensitive
+        Assert.Equal(["go"], await GetKeys("son~JAN"));
+        // empty value matches only empty values
+        Assert.Equal(["go"], await GetKeys("obsolete="));
+        Assert.Empty(await GetKeys("son="));
+    }
+
+    [Fact]
+    public async Task DeleteNodeAsync_DeletesItsFeatures()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+        int id = await store.AddNodeAsync(CreateFeaturedNode());
+
+        await store.DeleteNodeAsync(id);
+
+        // a new node with the same ID gets no features
+        await store.AddNodeAsync(new TaxoNode
+        {
+            Id = id, TreeId = "languages", ParentId = 1, Key = "go",
+            Label = "Go"
+        });
+        Assert.Empty((await store.GetNodeAsync(id, false, true))!.Features!);
+    }
+
+    [Fact]
+    public async Task ClearAsync_RemovesFeatures()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        await store.ClearAsync();
+
+        Assert.Equal(0, (await store.GetNodesAsync(new TaxoNodeFilter
+        {
+            Features = [new TaxoNodeFeatureFilter { Name = "status" }]
+        })).Total);
+    }
+    #endregion
+
     #region Import Tests
     private const string FLAT_TREES_CSV = @"id,name,note,flat
 languages,Programming Languages,,
@@ -1875,11 +2302,11 @@ colors,Colors,A list,true
 ";
 
     private const string FLAT_NODES_CSV =
-        @"tree_n,parent_key,key,label,filtered_label,flags,note
-1,,prog,Programming,programming,,
-1,prog,oop,Object-Oriented,object oriented,,""Classes, objects, and """"inheritance""""""
-2,,red,Red,red,,A warm color
-2,,green,Green,green,,
+        @"tree_n,parent_key,key,label,filtered_label,note
+1,,prog,Programming,programming,
+1,prog,oop,Object-Oriented,object oriented,""Classes, objects, and """"inheritance""""""
+2,,red,Red,red,A warm color
+2,,green,Green,green,
 ";
 
     private const string MAPPINGS_CSV = @"tree_n,node_key,scope,target,label
@@ -1992,7 +2419,7 @@ colors,Colors,A list,true
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             importer.ImportAsync(
                 new StringReader(FLAT_TREES_CSV),
-                new StringReader(FLAT_NODES_CSV + "2,red,crimson,Crimson,,,\n")));
+                new StringReader(FLAT_NODES_CSV + "2,red,crimson,Crimson,,\n")));
 
         Assert.Null(await store.GetNodeFromKeyAsync("colors", "red"));
     }
@@ -2010,6 +2437,96 @@ colors,Colors,A list,true
                 new StringReader(MAPPINGS_CSV + "2,blue,viaf,1,\n")));
 
         Assert.Null(await store.GetNodeFromKeyAsync("colors", "red"));
+    }
+
+    private const string IMPORT_FEATURES_CSV =
+        @"tree_n,node_key,name,value,filtered_value
+1,oop,since,""Simula 67, 1967"",
+1,oop,keyword,Classe,
+1,oop,keyword,Oggètto,
+1,oop,keyword,Inheritance,inherit
+2,red,obsolete,,
+";
+
+    [Fact]
+    public async Task ImportAsync_Features_ImportsThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        await importer.ImportAsync(
+            new StringReader(FLAT_TREES_CSV),
+            new StringReader(FLAT_NODES_CSV),
+            new StringReader(MAPPINGS_CSV),
+            new StringReader(IMPORT_FEATURES_CSV));
+
+        // features survive the second pass, which sets the parents, and
+        // keep their order; filtered values are computed when missing,
+        // keeping digits
+        TaxoNode oop = (await store.GetNodeFromKeyAsync(
+            "languages", "oop", true, true))!;
+        Assert.NotNull(oop.ParentId);
+        Assert.Equal(2, oop.Mappings!.Count);
+        Assert.Equal(["since", "keyword", "keyword", "keyword"],
+            oop.Features!.Select(f => f.Name));
+        Assert.Equal(["Simula 67, 1967", "Classe", "Oggètto", "Inheritance"],
+            oop.Features!.Select(f => f.Value));
+        Assert.Equal(["simula 67, 1967", "classe", "oggetto", "inherit"],
+            oop.Features!.Select(f => f.FilteredValue));
+
+        TaxoNode red = (await store.GetNodeFromKeyAsync(
+            "colors", "red", false, true))!;
+        Assert.Equal("obsolete=", Assert.Single(red.Features!).ToString());
+        Assert.Empty((await store.GetNodeFromKeyAsync(
+            "colors", "green", false, true))!.Features!);
+
+        // the computed filtered value is searchable
+        Assert.Equal(["oop"], Keys(await store.GetNodesAsync(AllNodes(f =>
+            f.Features = [TaxoNodeFeatureFilter.Parse("keyword=oggetto")!]))));
+    }
+
+    [Fact]
+    public async Task ImportAsync_FeatureForUnknownNode_Throws()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            importer.ImportAsync(
+                new StringReader(FLAT_TREES_CSV),
+                new StringReader(FLAT_NODES_CSV),
+                null,
+                new StringReader(IMPORT_FEATURES_CSV + "2,blue,x,1,\n")));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("colors", "red"));
+    }
+
+    [Fact]
+    public async Task ImportAsync_FeatureWithoutName_Throws()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            importer.ImportAsync(
+                new StringReader(FLAT_TREES_CSV),
+                new StringReader(FLAT_NODES_CSV),
+                null,
+                new StringReader(IMPORT_FEATURES_CSV + "2,red,,1,\n")));
+    }
+
+    [Fact]
+    public void FilterFeatureValue_KeepsDigits()
+    {
+        using PgSqlTaxoStore store = new(new TaxoStoreOptions
+        {
+            Source = string.Format(CS_TEMPLATE, DB_NAME)
+        });
+        TaxoTreeImporter importer = new(store);
+
+        Assert.Equal("c. 1265-1321 ad", importer.FilterFeatureValue(
+            "C. 1265-1321 AD"));
+        Assert.Equal("c. - ad", importer.FilterLabel("C. 1265-1321 AD"));
     }
 
     [Fact]
@@ -2034,9 +2551,66 @@ colors,Colors,A list,true
         Assert.Equal(2, (await store.GetNodeFromKeyAsync(
             "languages", "oop", true))!.Mappings!.Count);
     }
+
+    [Fact]
+    public async Task InitializeAsync_SeedFeatureSource_SeedsFeatures()
+    {
+        // the seeded store uses SeedFeatureSource
+        using PgSqlTaxoStore store = CreateStoreAsync(false);
+
+        Assert.Equal(["status=Draft", "paradigm=Object-Oriented",
+            "paradigm=Functional"],
+            (await store.GetNodeFromKeyAsync("languages", "csharp", false,
+                true))!.Features!.Select(f => f.ToString()));
+    }
     #endregion
 
     #region Upgrade Tests
+    [Fact]
+    public async Task InitializeAsync_FlagsSchema_IsUpgradedToFeatures()
+    {
+        string connectionString = string.Format(CS_TEMPLATE, DB_NAME);
+
+        // downgrade to the schema with node flags and no features
+        using (PgSqlTaxoStore old = CreateStoreAsync(false))
+        {
+            await using NpgsqlConnection connection = new(connectionString);
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using NpgsqlCommand command = new(
+                "DROP TABLE node_feature; " +
+                "ALTER TABLE node ADD COLUMN flags VARCHAR(50) " +
+                "NOT NULL DEFAULT ''; " +
+                "CREATE INDEX idx_node_flags ON node(flags);",
+                connection);
+            await command.ExecuteNonQueryAsync(
+                TestContext.Current.CancellationToken);
+        }
+        NpgsqlConnection.ClearAllPools();
+
+        using PgSqlTaxoStore store = new(new TaxoStoreOptions
+        {
+            Source = connectionString
+        });
+        await store.InitializeAsync();
+
+        // existing nodes are kept, and features work
+        Assert.Equal("java", (await store.GetNodeAsync(5))!.Key);
+        int id = await store.AddNodeAsync(CreateFeaturedNode());
+        Assert.Equal(4, (await store.GetNodeAsync(id, false, true))!
+            .Features!.Count);
+        Assert.Equal(["go"], Keys(await store.GetNodesAsync(AllNodes(f =>
+            f.Features = [TaxoNodeFeatureFilter.Parse("son=jane")!]))));
+
+        // the flags column was removed
+        await using NpgsqlConnection check = new(connectionString);
+        await check.OpenAsync(TestContext.Current.CancellationToken);
+        await using NpgsqlCommand checkCommand = new(
+            "SELECT COUNT(*) FROM information_schema.columns " +
+            "WHERE table_name = 'node' AND column_name = 'flags'", check);
+        Assert.Equal(0L, await checkCommand.ExecuteScalarAsync(
+            TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task InitializeAsync_PreviousSchema_IsUpgradedKeepingData()
     {

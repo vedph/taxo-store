@@ -66,11 +66,14 @@ public interface ITaxoStore
     /// typically in deeply nested hierarchies with a small number of roots.</param>
     /// <param name="includeMappings">True to also fetch the mappings of the
     /// retrieved nodes.</param>
+    /// <param name="includeFeatures">True to also fetch the features of the
+    /// retrieved nodes.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains the requested page of <see cref="TaxoNode"/>'s. When page
     /// size is 0, the result contains all root nodes.</returns>
     public Task<DataPage<TaxoNode>> GetRootNodes(string treeId,
-        PagingOptions options, bool includeMappings = false);
+        PagingOptions options, bool includeMappings = false,
+        bool includeFeatures = false);
 
     /// <summary>
     /// Retrieves the node with the specified identifier.
@@ -79,10 +82,13 @@ public interface ITaxoStore
     /// zero.</param>
     /// <param name="includeMappings">True to also fetch the mappings of the
     /// retrieved node.</param>
+    /// <param name="includeFeatures">True to also fetch the features of the
+    /// retrieved node.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains the node with the specified identifier, or <c>null</c>
     /// if no such node exists.</returns>
-    public Task<TaxoNode?> GetNodeAsync(int id, bool includeMappings = false);
+    public Task<TaxoNode?> GetNodeAsync(int id, bool includeMappings = false,
+        bool includeFeatures = false);
 
     /// <summary>
     /// Retrieves the node associated with the specified key from the given tree.
@@ -91,11 +97,14 @@ public interface ITaxoStore
     /// <param name="key">The key of the node to retrieve.</param>
     /// <param name="includeMappings">True to also fetch the mappings of the
     /// retrieved node.</param>
+    /// <param name="includeFeatures">True to also fetch the features of the
+    /// retrieved node.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains the node associated with the specified key, or null
     /// if no such node exists.</returns>
     public Task<TaxoNode?> GetNodeFromKeyAsync(string treeId, string key,
-        bool includeMappings = false);
+        bool includeMappings = false,
+        bool includeFeatures = false);
 
     /// <summary>
     /// Retrieves a paged list of nodes that match the specified filter criteria.
@@ -103,11 +112,14 @@ public interface ITaxoStore
     /// <param name="filter">The filter criteria used to select nodes.</param>
     /// <param name="includeMappings">True to also fetch the mappings of the
     /// retrieved nodes.</param>
+    /// <param name="includeFeatures">True to also fetch the features of the
+    /// retrieved nodes.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains a DataPage of Node objects that match the filter.
     /// If no nodes match, the collection will be empty.</returns>
     public Task<DataPage<TaxoNode>> GetNodesAsync(TaxoNodeFilter filter,
-        bool includeMappings = false);
+        bool includeMappings = false,
+        bool includeFeatures = false);
 
     /// <summary>
     /// Adds a new node (when its ID is 0) or updates an existing one (when
@@ -118,14 +130,16 @@ public interface ITaxoStore
     /// <remarks>When the node's <see cref="TaxoNode.Mappings"/> are not null,
     /// they replace all the mappings of that node in the store (so, an empty
     /// list removes them all). When they are null, the mappings of the node
-    /// in the store are left untouched.</remarks>
+    /// in the store are left untouched. The same holds for the node's
+    /// <see cref="TaxoNode.Features"/>.</remarks>
     /// <param name="node">The node to add. Cannot be null.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains the ID of the added or updated node.</returns>
     /// <exception cref="System.ArgumentException">Invalid node data, e.g.
     /// missing tree or key, a changed key of an existing node, a parent
     /// belonging to another tree, a parent which would create a cycle, a
-    /// parent in a flat tree, or invalid or duplicate mappings.</exception>
+    /// parent in a flat tree, invalid or duplicate mappings, or invalid
+    /// features.</exception>
     /// <exception cref="TaxoStoreConflictException">The node key is already
     /// used by another node in the same tree.</exception>
     public Task<int> AddNodeAsync(TaxoNode node);
@@ -149,7 +163,7 @@ public interface ITaxoStore
     /// Each node must contain valid data required for insertion. If it has ID
     /// equal to 0, it will be added as a new node. Else, the existing node
     /// with that ID will be updated (its key cannot be changed), or added if
-    /// not found. Mappings are handled as in
+    /// not found. Mappings and features are handled as in
     /// <see cref="AddNodeAsync(TaxoNode)"/>.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains a list of integers representing the identifiers assigned
@@ -177,12 +191,15 @@ public interface ITaxoStore
     /// nodes are to be retrieved. Must be a valid node identifier.</param>
     /// <param name="includeMappings">True to also fetch the mappings of the
     /// retrieved nodes.</param>
+    /// <param name="includeFeatures">True to also fetch the features of the
+    /// retrieved nodes.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains a list of child nodes for the specified parent, sorted
     /// by their key.
     /// The list is empty if the parent node has no children.</returns>
     public Task<IList<TaxoNode>> GetChildNodesAsync(int parentId,
-        bool includeMappings = false);
+        bool includeMappings = false,
+        bool includeFeatures = false);
 
     /// <summary>
     /// Retrieves all descendant nodes of the specified parent node.
@@ -191,12 +208,15 @@ public interface ITaxoStore
     /// descendant nodes are to be retrieved.</param>
     /// <param name="includeMappings">True to also fetch the mappings of the
     /// retrieved nodes.</param>
+    /// <param name="includeFeatures">True to also fetch the features of the
+    /// retrieved nodes.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains a list of descendant nodes, in depth-first (pre-order)
     /// traversal order, sorting siblings by their key. The list is empty if the parent node
     /// has no descendants.</returns>
     public Task<IList<TaxoNode>> GetDescendantNodesAsync(int parentId,
-        bool includeMappings = false);
+        bool includeMappings = false,
+        bool includeFeatures = false);
 
     /// <summary>
     /// Retrieves all ancestor nodes of the specified node, ordered from the
@@ -206,12 +226,15 @@ public interface ITaxoStore
     /// ancestor nodes. Must correspond to an existing node.</param>
     /// <param name="includeMappings">True to also fetch the mappings of the
     /// retrieved nodes.</param>
+    /// <param name="includeFeatures">True to also fetch the features of the
+    /// retrieved nodes.</param>
     /// <returns>A task that represents the asynchronous operation. The task
     /// result contains a list of ancestor nodes, ordered from the immediate
     /// parent to the root. The list is empty if the node has no ancestors.
     /// </returns>
     public Task<IList<TaxoNode>> GetAncestorNodesAsync(int nodeId,
-        bool includeMappings = false);
+        bool includeMappings = false,
+        bool includeFeatures = false);
 
     /// <summary>
     /// Retrieves the path from the root node to the specified target node,

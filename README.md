@@ -14,9 +14,9 @@ The **node** is a simple structure with:
 - a string tree ID (referencing the tree's key).
 - a human-friendly ID string (key) that is unique only within its tree.
 - a human-friendly label string and its searchable (filtered) counterpart.
-- a set of flags where each character represents a boolean attribute.
 - an optional note.
 - any number of optional **mappings** to equivalent entities in external resources (see [Node Mappings](#node-mappings)).
+- any number of optional **features**, i.e. generic name=value attributes (see [Node Features](#node-features)).
 
 ![database schema](db.png)
 
@@ -53,6 +53,27 @@ Mappings are read and written together with their node:
 - **searching**: nodes can be filtered by the exact scope and/or target of their mappings (`mappingScope`, `mappingTarget`), e.g. to find the node mapped to a given VIAF ID; and by any part of the filtered label of any of their mappings (`filteredMappingLabel`). When both `filteredLabel` and `filteredMappingLabel` are set, they are combined with **OR**: a node matches when either its own filtered label or the filtered label of any of its mappings matches. So, a lookup typically sets both to the same text, to find nodes via their labels or their aliases.
 - deleting a node also deletes its mappings.
 
+### Node Features
+
+Besides its fixed properties, each node can have any number of **features**, i.e. generic name=value pairs used to attach any attribute to it, whatever its nature: e.g. a status (`status`=`draft`), a year (`born`=`384 BC`), a color, a category, etc. Features are designed to be generic and unpredictable: the store does not define any feature name, which is up to consumer code.
+
+A feature has:
+
+- `name` (max 50 characters): the feature name. It cannot be empty, nor include `=` or `~`, which are reserved for the [search syntax](#available-api-endpoints).
+- `value` (max 500 characters): the feature value. It can be empty, so that a feature can also be used as a boolean marker, whose presence is all what matters (e.g. `obsolete`). This replaces the flags of previous versions.
+- `filteredValue` (max 500 characters, optional): the searchable ("index") counterpart of `value`, built with the same criteria used for the node's filtered label, except that **digits are kept**, as values often are numbers or codes. When not set, the store falls back to `value`; the CSV importer generates it from `value` when empty.
+
+A node can have **more features with the same name**, e.g. `son`=`Mark` and `son`=`Jane` for the two sons of a person, or more `color` features for a multi-colored fruit. So, features have no natural key: in table `node_feature` they just have a surrogate numeric ID, which also preserves their order.
+
+Features are read and written together with their node, exactly like [mappings](#node-mappings):
+
+- **reading**: all the methods and endpoints returning nodes have an `includeFeatures` option, false by default, so that features are fetched only when requested (with a single additional query, whatever the number of nodes). When not requested, the node's `features` are null; when requested, they are an array, empty if the node has no features, in their insertion order.
+- **writing**: when saving a node, a null (or omitted) `features` property leaves the features of that node untouched; any other value replaces them all, so that an empty array removes all the features of the node.
+- **searching**: nodes can be filtered by any number of feature criteria (`features`), each matched by any feature of the node having its exact name (case-sensitive) and, optionally, its value. The value is compared with the feature's filtered value, either as a whole (case-sensitive, so it should be filtered like stored values) or as any part of it (case-insensitive). Criteria are combined according to `featureMatchMode`: `all` (default: each criterion must be matched, possibly by different features), `any` (at least one), or `none` (no criterion must be matched). As for labels, `matchDescendants` also includes the nodes having any descendant matching the features (with `none`, any descendant having none of them).
+- deleting a node also deletes its features.
+
+The searches are backed by dedicated indexes: a B-tree on `(name, value_ix)` for name-only and exact value matches, a trigram index on `value_ix` for partial value matches, and a B-tree on `(node_id, name)` used when checking the features of candidate nodes and when loading them.
+
 ### Computed Position Properties
 
 For tree visualization and navigation purposes, the API can compute and return additional properties:
@@ -66,11 +87,11 @@ These properties are **computed at runtime**, not stored in the database (for an
 - **Single-node endpoints** (`GET /api/taxostore/nodes/{id}` and `GET /api/taxostore/nodes/tree/{treeId}/key/{key}`) always return the positioned model with X, Y, and HasChildren values.
 - **Bulk endpoints** (children, descendants, ancestors, filtered queries) accept an optional `includePosition` query parameter. When set to `true`, X, Y, and HasChildren values are computed and included; otherwise they are omitted for better performance.
 
-So, the note data essentially consists only in its identity and the corresponding human-friendly label, plus an optional note and a bunch of customizable flags. This is generic enough and fit to its primary purposes, which is providing taxonomies which can be either flat (when all nodes are root nodes) or hierarchical.
+So, the node data essentially consists only in its identity and the corresponding human-friendly label, plus an optional note, its mappings, and any number of generic features. This is generic enough and fit to its primary purposes, which is providing taxonomies which can be either flat (when all nodes are root nodes) or hierarchical.
 
 For instance, imagine a taxonomy like that of IconClass for iconographic "keywords". The taxonomy which will be used will use strings as identifiers for both trees and nodes. These will usually be meaningful IDs, like `christ.hand.right.up` for a node (where each dot here represents a step down the tree), and `iconography` for a tree; but this is up to the taxonomy we want to represent. The store is generic enough to represent any taxonomies, like e.g. product categories, where each category can have subcategories, and each category and subcategory can have a unique key and label.
 
-> If you need to attach more data to nodes, you can further extend this project by adding new tables which provide more data payload attached to each node.
+> If you need to attach more data to nodes, [features](#node-features) can be used for any name=value attribute; for more structured payloads, you can further extend this project by adding new tables attached to each node.
 
 The intended first application of this project is having any number of massive editable taxonomies with high performance for read operations in those [Cadmus](https://vedph.github.io/cadmus-doc)-based projects which rely on huge taxonomies, and still allow users to edit the taxonomy when required.
 
@@ -194,6 +215,7 @@ By default, `AddTaxoStoreServices` looks for seed files at:
 - `wwwroot/taxo/trees.csv`: tree definitions. Each tree is implicitly numbered with an ordinal when importing it, which makes it easier to refer nodes to it. The first imported tree is 1, the second 2, and so forth. So, in the nodes file you will refer to 1 for the first tree, 2 for the second, and so forth.
 - `wwwroot/taxo/nodes.csv`: node data.
 - `wwwroot/taxo/mappings.csv`: node mappings data. This file is optional.
+- `wwwroot/taxo/features.csv`: node features data. This file is optional.
 
 If these files exist, they will be automatically used for seeding when the database is first created.
 
@@ -211,12 +233,12 @@ colors,Colors,"A flat list of colors",true
 - 📁 `nodes.csv`:
 
 ```csv
-tree_n,parent_key,key,label,filtered_label,flags,note
-1,,electronics,Electronics,electronics,,
-1,electronics,computers,Computers,computers,,"Desktops, laptops, and servers"
-1,electronics,phones,Mobile Phones,mobile phones,,
-2,,food,Food & Beverages,food beverages,,
-3,,red,Red,red,,
+tree_n,parent_key,key,label,filtered_label,note
+1,,electronics,Electronics,electronics,
+1,electronics,computers,Computers,computers,"Desktops, laptops, and servers"
+1,electronics,phones,Mobile Phones,mobile phones,
+2,,food,Food & Beverages,food beverages,
+3,,red,Red,red,
 ```
 
 - 📁 `mappings.csv` (optional):
@@ -227,6 +249,17 @@ tree_n,node_key,scope,target,label,filtered_label
 1,computers,getty,300212998,computers,
 1,computers,alias,it,Calcolatóri,calcolatori
 3,red,getty,300126225,red (color),
+```
+
+- 📁 `features.csv` (optional):
+
+```csv
+tree_n,node_key,name,value,filtered_value
+1,computers,status,draft,
+1,phones,brand,Nokia,
+1,phones,brand,Motorola,
+1,phones,since,1973,
+3,red,obsolete,,
 ```
 
 Fields in `trees.csv`:
@@ -243,7 +276,6 @@ Fields in `nodes.csv`:
 - `key`: unique identifier within the tree.
 - `label`: display label.
 - `filtered_label`: searchable label (auto-generated if empty).
-- `flags`: optional flags string.
 - `note`: optional note (the column itself can be omitted). Like any other field, it must be wrapped in double quotes when it includes the delimiter, quotes (escaped by doubling them) or line breaks.
 
 Fields in `mappings.csv`:
@@ -254,6 +286,16 @@ Fields in `mappings.csv`:
 - `target`: the target ID.
 - `label`: optional human-friendly label of the target.
 - `filtered_label`: optional searchable label of the target (auto-generated from `label` if empty). The column itself can be omitted.
+
+Fields in `features.csv`:
+
+- `tree_n`: tree number (1-based index from trees.csv) of the node.
+- `node_key`: key of the node. The node must be found in `nodes.csv`.
+- `name`: the feature name (required).
+- `value`: the feature value (can be empty).
+- `filtered_value`: optional searchable value (auto-generated from `value` if empty, keeping digits). The column itself can be omitted.
+
+Features are imported in their order, which is preserved for each node.
 
 > To specify custom paths for seed files:
 
@@ -273,6 +315,10 @@ builder.Services.AddTreeServices(options =>
     // optional
     options.SeedMappingSource = Path.Combine(
         builder.Environment.ContentRootPath, "Data", "my-mappings.csv");
+
+    // optional
+    options.SeedFeatureSource = Path.Combine(
+        builder.Environment.ContentRootPath, "Data", "my-features.csv");
 });
 ```
 
@@ -280,12 +326,12 @@ Note:
 
 - seeding only occurs when the database is **first created**.
 - if the database already exists, seed files are ignored. To re-seed, drop the database and restart the application.
-- the importer automatically generates filtered labels if not provided.
+- the importer automatically generates filtered labels and filtered feature values if not provided.
 - a database created by a previous version of TaxoStore is automatically upgraded at initialization (see [Upgrading Existing Databases](#upgrading-existing-databases)).
 
 ### Upgrading Existing Databases
 
-Flat trees and node mappings require a `flat` column in table `tree` and a new `node_mapping` table; mapping filtered labels require a `label_ix` column in `node_mapping`. When the store is initialized on a database which already exists, it runs an idempotent upgrade script which adds them when missing, leaving existing data untouched (existing trees are not flat, nodes have no mappings, and the filtered label of existing mappings is copied from their label). So, no manual migration is required; the database user must just be allowed to alter the schema. Should you prefer to upgrade the database by yourself, this is the script:
+Flat trees and node mappings require a `flat` column in table `tree` and a new `node_mapping` table; mapping filtered labels require a `label_ix` column in `node_mapping`; node features require a new `node_feature` table, and replace the `flags` column of table `node`. When the store is initialized on a database which already exists, it runs an idempotent upgrade script which adds them when missing, leaving existing data untouched (existing trees are not flat, nodes have no mappings nor features, and the filtered label of existing mappings is copied from their label), except for node **flags, which are dropped** without being converted into features. So, no manual migration is required; the database user must just be allowed to alter the schema. Should you prefer to upgrade the database by yourself, this is the script:
 
 ```sql
 ALTER TABLE tree ADD COLUMN IF NOT EXISTS flat BOOLEAN NOT NULL DEFAULT FALSE;
@@ -303,6 +349,21 @@ CREATE INDEX IF NOT EXISTS idx_node_mapping_scope_target ON node_mapping(scope, 
 ALTER TABLE node_mapping ADD COLUMN IF NOT EXISTS label_ix VARCHAR(500);
 UPDATE node_mapping SET label_ix = label WHERE label_ix IS NULL AND label IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_node_mapping_label_ix_trgm ON node_mapping USING gin(label_ix gin_trgm_ops);
+
+CREATE TABLE IF NOT EXISTS node_feature (
+    id       SERIAL PRIMARY KEY,
+    node_id  INT NOT NULL REFERENCES node(id) ON DELETE CASCADE,
+    name     VARCHAR(50) NOT NULL,
+    value    VARCHAR(500) NOT NULL DEFAULT '',
+    value_ix VARCHAR(500) NOT NULL DEFAULT '',
+    CONSTRAINT chk_node_feature_name CHECK (name <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_feature_node_name ON node_feature(node_id, name);
+CREATE INDEX IF NOT EXISTS idx_node_feature_name_value_ix ON node_feature(name, value_ix) INCLUDE (node_id);
+CREATE INDEX IF NOT EXISTS idx_node_feature_value_ix_trgm ON node_feature USING gin(value_ix gin_trgm_ops);
+
+ALTER TABLE node DROP COLUMN IF EXISTS flags;
 ```
 
 ### Available API Endpoints
@@ -316,23 +377,23 @@ Once integrated, the following endpoints become available:
   - `DELETE /api/taxostore/trees/{id}` - Delete a tree by its ID (string key).
 
 - **Node Endpoints** (via `TaxoNodeController`):
-  - `GET /api/taxostore/nodes/{id}` - Get a node by its numeric ID (query params: includeMappings). Returns `PositionedNodeModel` with X/Y/HasChildren.
-  - `GET /api/taxostore/nodes/tree/{treeId}/key/{key}` - Get a node by tree ID (string) and node key (string) (query params: includeMappings). Returns `PositionedNodeModel` with X/Y/HasChildren.
-  - `GET /api/taxostore/nodes` - Get paginated nodes with filtering (query params: pageNumber, pageSize, treeId, parentId, isRoot, key, parentKey, ancestorKey, filteredLabel, filteredMappingLabel, matchDescendants, flags, flagMatchMode, isLeaf, mappingScope, mappingTarget, includePosition, includeMappings). Notes:
+  - `GET /api/taxostore/nodes/{id}` - Get a node by its numeric ID (query params: includeMappings, includeFeatures). Returns `PositionedNodeModel` with X/Y/HasChildren.
+  - `GET /api/taxostore/nodes/tree/{treeId}/key/{key}` - Get a node by tree ID (string) and node key (string) (query params: includeMappings, includeFeatures). Returns `PositionedNodeModel` with X/Y/HasChildren.
+  - `GET /api/taxostore/nodes` - Get paginated nodes with filtering (query params: pageNumber, pageSize, treeId, parentId, isRoot, key, parentKey, ancestorKey, filteredLabel, filteredMappingLabel, matchDescendants, features, featureMatchMode, isLeaf, mappingScope, mappingTarget, includePosition, includeMappings, includeFeatures). Notes:
     - `pageSize`=0 disables paging and returns all the matching nodes.
     - `key`, `parentKey`, `filteredLabel`, `filteredMappingLabel` match any part of the corresponding value (case-insensitive; `%` and `_` are matched literally).
     - `ancestorKey` is the exact key of an ancestor node: only its descendants (at any depth) are matched.
     - `filteredMappingLabel` matches the filtered label of any mapping of the node. When `filteredLabel` is also set, the two are combined with OR (the node's own filtered label or any of its mapping filtered labels).
-    - `matchDescendants`: when true with `filteredLabel` and/or `filteredMappingLabel`, a node matches also when any of its descendants match the label(s).
-    - `flags` is a set of single-character flags; `flagMatchMode` is `any` (default: at least one flag present), `all` (all flags present), or `none` (no flag present).
+    - `matchDescendants`: when true with `filteredLabel`, `filteredMappingLabel` and/or `features`, a node matches also when any of its descendants matches these criteria. Each matching descendant must match all of them by itself: e.g. a descendant matching the label and another one matching the features do not make their ancestor match. The other criteria (e.g. `parentId`, `isRoot`, `isLeaf`) still apply to the returned nodes themselves. This is used to browse a filtered tree level by level, without hiding nodes whose descendants match.
+    - `features` is a feature criterion, repeated for each criterion (max 20), with syntax `name` (the node has a feature with that name, whatever its value), `name=value` (the feature filtered value is equal to value), or `name~value` (the feature filtered value contains value, case-insensitive); e.g. `features=status=draft&features=color~red`. The first `=` or `~` separates the name from the value; invalid criteria (empty, or without name) are ignored. Names are matched exactly (case-sensitive). `featureMatchMode` is `all` (default: each criterion matched by a feature of the node), `any` (at least one criterion matched), or `none` (no criterion matched).
     - `mappingScope`, `mappingTarget` match the exact scope and/or target of a mapping of the node (case-sensitive). When both are specified, they must be matched by the same mapping.
-  - `GET /api/taxostore/nodes/roots/{treeId}` - Get root nodes of a tree (query params: pageNumber, pageSize, includePosition, includeMappings).
+  - `GET /api/taxostore/nodes/roots/{treeId}` - Get root nodes of a tree (query params: pageNumber, pageSize, includePosition, includeMappings, includeFeatures).
   - `GET /api/taxostore/nodes/{id}/haschildren` - Check if a node has children (returns boolean).
-  - `GET /api/taxostore/nodes/{id}/children` - Get child nodes of a parent node (query params: includePosition, includeMappings).
-  - `GET /api/taxostore/nodes/{id}/descendants` - Get all descendant nodes of a node, in depth-first order with siblings sorted by key (query params: includePosition, includeMappings).
-  - `GET /api/taxostore/nodes/{id}/ancestors` - Get all ancestor nodes of a node (query params: includePosition, includeMappings).
+  - `GET /api/taxostore/nodes/{id}/children` - Get child nodes of a parent node (query params: includePosition, includeMappings, includeFeatures).
+  - `GET /api/taxostore/nodes/{id}/descendants` - Get all descendant nodes of a node, in depth-first order with siblings sorted by key (query params: includePosition, includeMappings, includeFeatures).
+  - `GET /api/taxostore/nodes/{id}/ancestors` - Get all ancestor nodes of a node (query params: includePosition, includeMappings, includeFeatures).
   - `GET /api/taxostore/nodes/{id}/path` - Get the path from the root to a node, with the page number of each step (query params: pageSize).
-  - `POST /api/taxostore/nodes` - Create or update a node (body: NodeBindingModel with id, parentId, treeId, key, label, filteredLabel, flags, note, mappings). Returns 201 with the node ID in the body; 400 if the node is invalid (e.g. missing tree or parent, parent in another tree, parent creating a cycle, parent in a flat tree, duplicate mappings); when `mappings` is null or omitted the node's mappings are left untouched, else they replace all the node's mappings (an empty array removes them); 409 if its key is already used in the same tree.
+  - `POST /api/taxostore/nodes` - Create or update a node (body: NodeBindingModel with id, parentId, treeId, key, label, filteredLabel, note, mappings, features). Returns 201 with the node ID in the body; 400 if the node is invalid (e.g. missing tree or parent, parent in another tree, parent creating a cycle, parent in a flat tree, duplicate mappings, invalid features); when `mappings` is null or omitted the node's mappings are left untouched, else they replace all the node's mappings (an empty array removes them), and the same holds for `features`; 409 if its key is already used in the same tree.
   - `POST /api/taxostore/nodes/batch` - Bulk create or update nodes (body: array of NodeBindingModel), in a single transaction: if any node is invalid, no node is saved.
   - `DELETE /api/taxostore/nodes/{id}` - Delete a node by its numeric ID.
   - `DELETE /api/taxostore/nodes` - Clear all data from the store.
@@ -340,8 +401,10 @@ Once integrated, the following endpoints become available:
 > The `includePosition` query parameter (boolean, default `false`) controls whether X (sibling position), Y (depth), and HasChildren values are computed and included in the response. Set to `true` when position data is needed for visualization; omit or set to `false` for better performance when only node data is required.
 >
 > The `includeMappings` query parameter (boolean, default `false`) controls whether the [mappings](#node-mappings) of each node are fetched and included in the response.
+>
+> The `includeFeatures` query parameter (boolean, default `false`) controls whether the [features](#node-features) of each node are fetched and included in the response.
 
-Example of a node with mappings, as posted to `POST /api/taxostore/nodes`:
+Example of a node with mappings and features, as posted to `POST /api/taxostore/nodes`:
 
 ```json
 {
@@ -353,8 +416,21 @@ Example of a node with mappings, as posted to `POST /api/taxostore/nodes`:
     { "scope": "viaf", "target": "97105654", "label": "Dante Alighieri, 1265-1321" },
     { "scope": "wikidata", "target": "Q1067" },
     { "scope": "alias", "target": "1", "label": "Durante degli Alighièri", "filteredLabel": "durante degli alighieri" }
+  ],
+  "features": [
+    { "name": "born", "value": "1265", "filteredValue": "1265" },
+    { "name": "son", "value": "Iacopo", "filteredValue": "iacopo" },
+    { "name": "son", "value": "Pietro", "filteredValue": "pietro" },
+    { "name": "verified" }
   ]
 }
+```
+
+Example of a query for the nodes having a `son` feature whose value includes `pietr`, and no `obsolete` feature (two queries, as the match mode applies to all criteria):
+
+```txt
+GET /api/taxostore/nodes?treeId=people&features=son~pietr
+GET /api/taxostore/nodes?treeId=people&features=obsolete&featureMatchMode=none
 ```
 
 ### Docker Deployment
@@ -415,12 +491,13 @@ With corresponding `appsettings.json`:
 ### import-store
 
 ```sh
-taxo-tool import-store <TREES_CSV> <NODES_CSV> -d <DATABASE_NAME> [-m <MAPPINGS_CSV>] [-c <CONNECTION_TEMPLATE>]
+taxo-tool import-store <TREES_CSV> <NODES_CSV> -d <DATABASE_NAME> [-m <MAPPINGS_CSV>] [-f <FEATURES_CSV>] [-c <CONNECTION_TEMPLATE>]
 ```
 
 - `TREES_CSV`, `NODES_CSV`: paths to the seed CSV files (same format as [described above](#step-4-optional---seed-data-from-csv-files)).
 - `-d`/`--database`: name of the database to create and seed.
 - `-m`/`--mappings`: optional path to the seed CSV file with node mappings.
+- `-f`/`--features`: optional path to the seed CSV file with node features.
 - `-c`/`--connection`: optional PostgreSQL connection string template, with `{0}` as a placeholder for the database name (e.g. `Server=localhost;Database={0};User Id=postgres;Password=postgres`). When omitted, it is read from the `TaxoStore` connection string in the tool's own configuration (`appsettings.json`/`appsettings.local.json`/environment variables, resolved next to the tool's executable).
 
 Example `appsettings.json` next to `taxo-tool.exe`:
@@ -443,4 +520,10 @@ The same, also importing node mappings:
 
 ```sh
 taxo-tool import-store wwwroot/taxo/trees.csv wwwroot/taxo/nodes.csv -m wwwroot/taxo/mappings.csv -d taxo
+```
+
+The same, also importing node features:
+
+```sh
+taxo-tool import-store wwwroot/taxo/trees.csv wwwroot/taxo/nodes.csv -m wwwroot/taxo/mappings.csv -f wwwroot/taxo/features.csv -d taxo
 ```

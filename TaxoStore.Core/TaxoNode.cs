@@ -44,13 +44,6 @@ public class TaxoNode
     public string FilteredLabel { get; set; } = "";
 
     /// <summary>
-    /// Flags attached to this node. Each character in the string is a flag.
-    /// For instance, <c>o</c>=obsolete, <c>d</c>=draft, etc. The value of
-    /// each character is defined by consumer code.
-    /// </summary>
-    public string? Flags { get; set; }
-
-    /// <summary>
     /// An optional note attached to this node.
     /// </summary>
     public string? Note { get; set; }
@@ -66,6 +59,16 @@ public class TaxoNode
     public IList<TaxoNodeMapping>? Mappings { get; set; }
 
     /// <summary>
+    /// The features of this node, i.e. generic name=value attributes, in
+    /// their insertion order. When reading nodes, this is null unless
+    /// features were explicitly requested; in that case, it is empty when
+    /// the node has no features. When writing a node, null means that the
+    /// node's features in the store are left untouched, while a non-null
+    /// value (even when empty) replaces all of them.
+    /// </summary>
+    public IList<TaxoNodeFeature>? Features { get; set; }
+
+    /// <summary>
     /// Returns a string representing this node.
     /// </summary>
     /// <returns></returns>
@@ -79,8 +82,8 @@ public class TaxoNode
         sb.Append(' ').Append(Key);
         sb.Append(": ").Append(Label);
 
-        if (!string.IsNullOrEmpty(Flags))
-            sb.Append('[').Append(Flags).Append(']');
+        if (Features?.Count > 0)
+            sb.Append(" [").AppendJoin("; ", Features).Append(']');
 
         return sb.ToString();
     }

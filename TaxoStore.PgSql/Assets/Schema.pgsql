@@ -36,15 +36,11 @@ CREATE TABLE node (
     key         VARCHAR(500) NOT NULL,
     label       VARCHAR(1000) NOT NULL,
     label_ix    VARCHAR(1000) NOT NULL,
-    flags       VARCHAR(50) NOT NULL DEFAULT '',
     note        VARCHAR(5000),
 
     -- Unique key within each tree; also serves as a B-tree index on (tree_id, key)
     -- for GetNodeFromKeyAsync and any exact-key lookups.
-    CONSTRAINT uq_node_tree_key UNIQUE (tree_id, key),
-
-    -- Enforce ASCII-only flags
-    CONSTRAINT chk_node_flags_ascii CHECK (flags ~ '^[\x00-\x7F]*$')
+    CONSTRAINT uq_node_tree_key UNIQUE (tree_id, key)
 );
 
 -- Trigram index on label_ix for all ILIKE '%pattern%' label searches:
@@ -60,11 +56,6 @@ CREATE INDEX idx_node_label_ix_trgm ON node USING gin(label_ix gin_trgm_ops);
 --   • AncestorKey CTE base: WHERE key ILIKE @ancestorKey
 -- Exact key lookups use uq_node_tree_key directly.
 CREATE INDEX idx_node_key_trgm ON node USING gin(key gin_trgm_ops);
-
--- B-tree for flag equality or prefix queries. Note: flags LIKE '%f%' (single
--- character) cannot benefit from any index type, but this index has low overhead
--- and may assist future equality or range queries on flags.
-CREATE INDEX idx_node_flags ON node(flags);
 
 -- Covering composite index for tree + parent + key queries.
 -- Replaces the former idx_node_tree_parent(tree_id, parent_id), which lacked the
@@ -119,3 +110,46 @@ CREATE INDEX idx_node_mapping_scope_target ON node_mapping(scope, target);
 -- the two trigram scans (on node and node_mapping) are merged with UNION.
 CREATE INDEX idx_node_mapping_label_ix_trgm ON node_mapping
     USING gin(label_ix gin_trgm_ops);
+
+-- ============================================
+-- TABLE: node_feature
+-- Generic name=value attributes of a node. A node can have any number of
+-- features, even with the same name (e.g. son=Mark, son=Jane), so the name
+-- is not part of any key. Features are always replaced as a whole set
+-- when saving a node, so the surrogate id is internal: it just preserves
+-- the insertion order of the features of each node. When changing this
+-- table, also update the upgrade script in PgSqlTaxoStore (UPGRADE_SQL).
+-- ============================================
+
+CREATE TABLE node_feature (
+    id          SERIAL PRIMARY KEY,
+    node_id     INT NOT NULL REFERENCES node(id) ON DELETE CASCADE,
+    name        VARCHAR(50) NOT NULL,
+    -- empty when the feature is just a boolean marker (e.g. obsolete)
+    value       VARCHAR(500) NOT NULL DEFAULT '',
+    -- the "index" version of value, used for searching; when not
+    -- specified, the store falls back to value (like node.label_ix)
+    value_ix    VARCHAR(500) NOT NULL DEFAULT '',
+
+    CONSTRAINT chk_node_feature_name CHECK (name <> '')
+);
+
+-- Features of nodes: loading the features of a set of nodes
+-- (WHERE node_id = ANY(...) ORDER BY node_id, id), the correlated
+-- EXISTS (... WHERE f.node_id = n.id AND f.name = ...) used by feature
+-- filters, and the ON DELETE CASCADE from node.
+CREATE INDEX idx_node_feature_node_name ON node_feature(node_id, name);
+
+-- Reverse lookup by name and exact value (GetNodesAsync Features filter):
+--   • name = @n                     (any node having that feature)
+--   • name = @n AND value_ix = @v   (exact value)
+-- node_id is included so that the matching node IDs are got with an
+-- index-only scan, to be joined to node via its primary key.
+CREATE INDEX idx_node_feature_name_value_ix ON node_feature(name, value_ix)
+    INCLUDE (node_id);
+
+-- Trigram index on value_ix for partial value matches
+-- (name = @n AND value_ix ILIKE '%pattern%'), combined with the above
+-- index on name via a bitmap AND.
+CREATE INDEX idx_node_feature_value_ix_trgm ON node_feature
+    USING gin(value_ix gin_trgm_ops);
