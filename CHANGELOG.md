@@ -1,5 +1,9 @@
 # History
 
+## 2.0.1
+
+- 2026-10-23: updated packages.
+
 ## 2.0.0
 
 - 2026-10-16: generic node features replace node flags.

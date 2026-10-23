@@ -4,33 +4,33 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- Unified version for all internal packages -->
-    <PackageVersion Include="Cadmus.Seed.TaxoStore.Parts" Version="2.0.0" />
-    <PackageVersion Include="Cadmus.TaxoStore.Parts" Version="2.0.0" />
-    <PackageVersion Include="TaxoStore.Api" Version="2.0.0" />
-    <PackageVersion Include="TaxoStore.Api.Controllers" Version="2.0.0" />
-    <PackageVersion Include="TaxoStore.Core" Version="2.0.0" />
-    <PackageVersion Include="TaxoStore.PgSql" Version="2.0.0" />
+    <PackageVersion Include="Cadmus.Seed.TaxoStore.Parts" Version="2.0.1" />
+    <PackageVersion Include="Cadmus.TaxoStore.Parts" Version="2.0.1" />
+    <PackageVersion Include="TaxoStore.Api" Version="2.0.1" />
+    <PackageVersion Include="TaxoStore.Api.Controllers" Version="2.0.1" />
+    <PackageVersion Include="TaxoStore.Core" Version="2.0.1" />
+    <PackageVersion Include="TaxoStore.PgSql" Version="2.0.1" />
     <!-- External dependencies for all packages -->
-    <PackageVersion Include="Cadmus.Core" Version="16.0.7" />
-    <PackageVersion Include="Cadmus.Seed" Version="16.0.7" />
+    <PackageVersion Include="Cadmus.Core" Version="16.0.13" />
+    <PackageVersion Include="Cadmus.Seed" Version="16.0.13" />
     <PackageVersion Include="coverlet.collector" Version="10.1.0" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="Fusi.Cli.Config" Version="1.0.3" />
     <PackageVersion Include="Fusi.Cli.Logging" Version="1.0.3" />
     <PackageVersion Include="Fusi.Microsoft.Extensions.Configuration.InMemoryJson" Version="5.0.0" />
-    <PackageVersion Include="Fusi.Text" Version="7.0.3" />
+    <PackageVersion Include="Fusi.Text" Version="7.0.6" />
     <PackageVersion Include="Fusi.Tools" Version="9.0.2" />
-    <PackageVersion Include="Fusi.Api.Auth.Controllers" Version="7.0.3" />
-    <PackageVersion Include="Fusi.Api.Auth.Models" Version="7.0.3" />
+    <PackageVersion Include="Fusi.Api.Auth.Controllers" Version="7.1.0" />
+    <PackageVersion Include="Fusi.Api.Auth.Models" Version="7.1.0" />
     <PackageVersion Include="Fusi.DbManager.PgSql" Version="6.0.4" />
     <PackageVersion Include="MessagingApi" Version="6.0.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.401" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.402" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageVersion Include="Polly" Version="8.8.0" />
-    <PackageVersion Include="Scalar.AspNetCore" Version="2.18.0" />
+    <PackageVersion Include="Scalar.AspNetCore" Version="2.18.2" />
     <PackageVersion Include="Serilog" Version="4.4.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
