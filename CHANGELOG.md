@@ -1,5 +1,9 @@
 # History
 
+## 2.0.2
+
+- 2026-11-02: upgraded CsvHelper to v34 (breaking API changes, see <https://joshclose.github.io/CsvHelper/migration/v34.0.0.html>). TaxoStore 2.0.1 was built against CsvHelper 33 and failed at runtime with `MissingMethodException` when consumers (e.g. Cadmus API) referenced CsvHelper 34. `TaxoTreeImporter` keeps its previous behavior: the CSV delimiter is set explicitly (it would be auto-detected otherwise), and missing fields and malformed quoting still throw instead of being silently recovered. `TaxoTreeImporter.Delimiter` must now be a single ASCII character.
+
 ## 2.0.1
 
 - 2026-10-23: updated packages.

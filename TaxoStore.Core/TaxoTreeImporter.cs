@@ -1,11 +1,9 @@
 ﻿using CsvHelper;
-using CsvHelper.Configuration;
 using Fusi.Text.Unicode;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
@@ -24,7 +22,7 @@ public sealed class TaxoTreeImporter
     private readonly HashSet<char> _whiteChars;
 
     /// <summary>
-    /// The delimiter used in CSV files.
+    /// The delimiter used in CSV files. This must be a single ASCII character.
     /// </summary>
     public string Delimiter { get; set; } = ",";
 
@@ -100,6 +98,26 @@ public sealed class TaxoTreeImporter
     }
 
     /// <summary>
+    /// Tries to get the value of the field with the specified header name
+    /// from the current record of the specified CSV reader.
+    /// </summary>
+    /// <param name="csv">The CSV reader.</param>
+    /// <param name="name">The header name.</param>
+    /// <param name="value">The value, or null if not found.</param>
+    /// <returns>False if the column or the field is missing.</returns>
+    private static bool TryGetString(CsvReader csv, string name,
+        out string? value)
+    {
+        if (csv.TryGetFieldIndex(name, out int index) && index < csv.FieldCount)
+        {
+            value = csv.GetString(index);
+            return true;
+        }
+        value = null;
+        return false;
+    }
+
+    /// <summary>
     /// Builds a lookup for the specified nodes by their tree ID and key.
     /// </summary>
     private static Dictionary<string, TaxoNode> GetKeyToNodes(
@@ -125,11 +143,11 @@ public sealed class TaxoTreeImporter
         List<TaxoTree> trees, Dictionary<string, TaxoNode> keyToNodes,
         string type)
     {
-        int treeN = csv.GetField<int>("tree_n");
+        int treeN = csv.Parse<int>("tree_n");
         if (treeN < 1 || treeN > trees.Count)
             throw new Exception($"Invalid tree_n value {treeN} for {type}");
 
-        string nodeKey = csv.GetField<string>("node_key")
+        string nodeKey = csv.GetString("node_key")
             ?? throw new Exception($"The {type} node key is required");
         if (!keyToNodes.TryGetValue($"{trees[treeN - 1].Id}#{nodeKey}",
             out TaxoNode? node))
@@ -146,19 +164,18 @@ public sealed class TaxoTreeImporter
     /// them to the node it refers to.
     /// </summary>
     /// <returns>The count of mappings read.</returns>
-    private int ReadMappings(TextReader mappingReader, CsvConfiguration config,
+    private int ReadMappings(TextReader mappingReader, CsvReaderOptions options,
         List<TaxoTree> trees, List<TaxoNode> nodes)
     {
-        using CsvReader csv = new(mappingReader, config);
+        using CsvReader csv = CsvReader.Create(mappingReader, options);
 
-        // read header and exit if none
-        if (!csv.Read())
+        // read header (on first access) and exit if none
+        if (csv.Headers.Count == 0)
         {
             _logger.LogWarning(
                 "Mapping CSV source is empty; no mappings imported");
             return 0;
         }
-        csv.ReadHeader();
 
         Dictionary<string, TaxoNode> keyToNodes = GetKeyToNodes(nodes);
 
@@ -168,12 +185,12 @@ public sealed class TaxoTreeImporter
             TaxoNode node = GetReferencedNode(csv, trees, keyToNodes,
                 "mapping");
 
-            string? label = csv.GetField<string?>("label");
+            string? label = csv.GetString("label");
             if (string.IsNullOrEmpty(label)) label = null;
 
             // filtered label (optional column; compute if missing)
             string? filteredLabel =
-                csv.TryGetField("filtered_label", out string? fl)
+                TryGetString(csv, "filtered_label", out string? fl)
                 && !string.IsNullOrEmpty(fl) ? fl : null;
             if (filteredLabel == null && label != null)
             {
@@ -184,9 +201,9 @@ public sealed class TaxoTreeImporter
             node.Mappings ??= [];
             node.Mappings.Add(new TaxoNodeMapping
             {
-                Scope = csv.GetField<string>("scope")
+                Scope = csv.GetString("scope")
                     ?? throw new Exception("Mapping scope is required"),
-                Target = csv.GetField<string>("target")
+                Target = csv.GetString("target")
                     ?? throw new Exception("Mapping target is required"),
                 Label = label,
                 FilteredLabel = filteredLabel
@@ -201,19 +218,18 @@ public sealed class TaxoTreeImporter
     /// them to the node it refers to, in their order.
     /// </summary>
     /// <returns>The count of features read.</returns>
-    private int ReadFeatures(TextReader featureReader, CsvConfiguration config,
+    private int ReadFeatures(TextReader featureReader, CsvReaderOptions options,
         List<TaxoTree> trees, List<TaxoNode> nodes)
     {
-        using CsvReader csv = new(featureReader, config);
+        using CsvReader csv = CsvReader.Create(featureReader, options);
 
-        // read header and exit if none
-        if (!csv.Read())
+        // read header (on first access) and exit if none
+        if (csv.Headers.Count == 0)
         {
             _logger.LogWarning(
                 "Feature CSV source is empty; no features imported");
             return 0;
         }
-        csv.ReadHeader();
 
         Dictionary<string, TaxoNode> keyToNodes = GetKeyToNodes(nodes);
 
@@ -223,15 +239,15 @@ public sealed class TaxoTreeImporter
             TaxoNode node = GetReferencedNode(csv, trees, keyToNodes,
                 "feature");
 
-            string name = csv.GetField<string>("name") ?? "";
+            string name = csv.GetString("name") ?? "";
             if (string.IsNullOrWhiteSpace(name))
                 throw new Exception("Feature name is required");
 
-            string value = csv.GetField<string?>("value") ?? "";
+            string value = csv.GetString("value") ?? "";
 
             // filtered value (optional column; compute if missing)
             string filteredValue =
-                csv.TryGetField("filtered_value", out string? fv)
+                TryGetString(csv, "filtered_value", out string? fv)
                 && !string.IsNullOrEmpty(fv) ? fv : FilterFeatureValue(value);
 
             node.Features ??= [];
@@ -285,14 +301,24 @@ public sealed class TaxoTreeImporter
         TextReader nodeReader, TextReader? mappingReader = null,
         TextReader? featureReader = null)
     {
+        if (Delimiter?.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"CSV delimiter must be a single character: \"{Delimiter}\"");
+        }
+
         // RFC 4180 mode: fields (e.g. labels or notes) including the
         // delimiter, quotes or line breaks must be wrapped in double quotes,
-        // with any inner quote doubled
-        CsvConfiguration config = new(CultureInfo.InvariantCulture)
+        // with any inner quote doubled. The separator is set explicitly as
+        // it would be auto-detected otherwise; missing fields and malformed
+        // quoting throw rather than being silently recovered from
+        CsvReaderOptions options = new()
         {
-            Delimiter = Delimiter,
-            Mode = CsvMode.RFC4180,
-            Quote = '"'
+            Separator = Delimiter[0],
+            Mode = CsvMode.Rfc4180,
+            Quote = '"',
+            MissingField = CsvMissingFieldHandling.Throw,
+            MalformedData = CsvMalformedDataHandling.Throw
         };
 
         _logger.LogInformation("Starting TaxoStore CSV import");
@@ -301,17 +327,16 @@ public sealed class TaxoTreeImporter
         try
         {
             // seed trees
-            using CsvReader treeCsv = new(treeReader, config);
+            using CsvReader treeCsv = CsvReader.Create(treeReader, options);
             List<TaxoTree> trees = [];
 
-            // read header and exit if none
-            if (!treeCsv.Read())
+            // read header (on first access) and exit if none
+            if (treeCsv.Headers.Count == 0)
             {
                 _logger.LogWarning(
                     "Tree CSV source is empty; import aborted");
                 return 0;
             }
-            treeCsv.ReadHeader();
 
             // read trees from CSV having fields id, name, note and
             // optionally flat
@@ -319,12 +344,12 @@ public sealed class TaxoTreeImporter
             {
                 TaxoTree tree = new()
                 {
-                    Id = treeCsv.GetField<string>("id")
+                    Id = treeCsv.GetString("id")
                         ?? throw new Exception("Tree ID is required"),
-                    Name = treeCsv.GetField<string>("name")
+                    Name = treeCsv.GetString("name")
                         ?? throw new Exception("Tree name is required"),
-                    Note = treeCsv.GetField<string?>("note"),
-                    Flat = treeCsv.TryGetField("flat", out string? flat)
+                    Note = treeCsv.GetString("note"),
+                    Flat = TryGetString(treeCsv, "flat", out string? flat)
                         && ParseBoolean(flat)
                 };
                 await _store.AddTreeAsync(tree);
@@ -340,32 +365,31 @@ public sealed class TaxoTreeImporter
             // track parent_key for each node to resolve in second pass
             List<string?> parentKeys = [];
 
-            using CsvReader nodeCsv = new(nodeReader, config);
+            using CsvReader nodeCsv = CsvReader.Create(nodeReader, options);
 
-            // read header and exit if none
-            if (!nodeCsv.Read())
+            // read header (on first access) and exit if none
+            if (nodeCsv.Headers.Count == 0)
             {
                 _logger.LogWarning(
                     "Node CSV source is empty; no nodes imported");
                 return 0;
             }
-            nodeCsv.ReadHeader();
 
             // PASS 1: Read and insert all nodes without parent IDs
             while (nodeCsv.Read())
             {
                 TaxoNode node = new();
-                int treeN = nodeCsv.GetField<int>("tree_n");
+                int treeN = nodeCsv.Parse<int>("tree_n");
                 if (treeN < 1 || treeN > trees.Count)
                     throw new Exception($"Invalid tree_n value {treeN} for node");
                 node.TreeId = trees[treeN - 1].Id;
 
                 // store parent_key for later resolution
-                string? parentKey = nodeCsv.GetField<string?>("parent_key");
+                string? parentKey = nodeCsv.GetString("parent_key");
                 parentKeys.Add(parentKey);
 
                 // key
-                node.Key = nodeCsv.GetField<string>("key")
+                node.Key = nodeCsv.GetString("key")
                     ?? throw new Exception("Node key is required");
 
                 // nodes in a flat tree cannot have a parent
@@ -377,11 +401,11 @@ public sealed class TaxoTreeImporter
                 }
 
                 // label
-                node.Label = nodeCsv.GetField<string>("label")
+                node.Label = nodeCsv.GetString("label")
                     ?? throw new Exception("Node label is required");
 
                 // filtered label (compute if missing)
-                string? filteredLabel = nodeCsv.GetField<string?>("filtered_label");
+                string? filteredLabel = nodeCsv.GetString("filtered_label");
                 if (string.IsNullOrEmpty(filteredLabel))
                 {
                     node.FilteredLabel = FilterLabel(node.Label);
@@ -393,7 +417,7 @@ public sealed class TaxoTreeImporter
 
 
                 // note (optional column)
-                node.Note = nodeCsv.TryGetField("note", out string? note)
+                node.Note = TryGetString(nodeCsv, "note", out string? note)
                     && !string.IsNullOrEmpty(note) ? note : null;
 
                 // parent ID will be set in pass 2
@@ -404,12 +428,12 @@ public sealed class TaxoTreeImporter
 
             // attach mappings to nodes, so that they are inserted with them
             int mappingsImported = mappingReader != null
-                ? ReadMappings(mappingReader, config, trees, nodes)
+                ? ReadMappings(mappingReader, options, trees, nodes)
                 : 0;
 
             // attach features to nodes, as for mappings
             int featuresImported = featureReader != null
-                ? ReadFeatures(featureReader, config, trees, nodes)
+                ? ReadFeatures(featureReader, options, trees, nodes)
                 : 0;
 
             // insert all nodes and build key-to-ID mapping

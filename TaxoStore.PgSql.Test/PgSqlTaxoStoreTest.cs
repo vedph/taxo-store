@@ -2439,6 +2439,64 @@ colors,Colors,A list,true
         Assert.Null(await store.GetNodeFromKeyAsync("colors", "red"));
     }
 
+    [Fact]
+    public async Task ImportAsync_SemicolonDelimiter_ImportsThem()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store) { Delimiter = ";" };
+
+        int count = await importer.ImportAsync(
+            new StringReader("id;name;note\ncolors;Colors;\n"),
+            // the comma is not a delimiter here
+            new StringReader("tree_n;parent_key;key;label;filtered_label\n" +
+                "1;;red;Red, warm;\n"));
+
+        Assert.Equal(1, count);
+        Assert.Equal("Red, warm",
+            (await store.GetNodeFromKeyAsync("colors", "red"))!.Label);
+    }
+
+    [Fact]
+    public async Task ImportAsync_InvalidDelimiter_Throws()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store) { Delimiter = ";;" };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            importer.ImportAsync(
+                new StringReader(FLAT_TREES_CSV),
+                new StringReader(FLAT_NODES_CSV)));
+    }
+
+    [Fact]
+    public async Task ImportAsync_HeaderOnly_ImportsNothing()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        int count = await importer.ImportAsync(
+            new StringReader(FLAT_TREES_CSV),
+            new StringReader("tree_n,parent_key,key,label,filtered_label\n"));
+
+        Assert.Equal(0, count);
+        Assert.NotNull(await store.GetTreeAsync("colors"));
+    }
+
+    [Fact]
+    public async Task ImportAsync_MissingField_Throws()
+    {
+        using PgSqlTaxoStore store = CreateStoreAsync(true);
+        TaxoTreeImporter importer = new(store);
+
+        // the last node has no label field
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            importer.ImportAsync(
+                new StringReader(FLAT_TREES_CSV),
+                new StringReader(FLAT_NODES_CSV + "2,,blue\n")));
+
+        Assert.Null(await store.GetNodeFromKeyAsync("colors", "red"));
+    }
+
     private const string IMPORT_FEATURES_CSV =
         @"tree_n,node_key,name,value,filtered_value
 1,oop,since,""Simula 67, 1967"",
