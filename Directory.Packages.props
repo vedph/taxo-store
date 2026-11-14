@@ -4,39 +4,39 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- Unified version for all internal packages -->
-    <PackageVersion Include="Cadmus.Seed.TaxoStore.Parts" Version="2.0.2" />
-    <PackageVersion Include="Cadmus.TaxoStore.Parts" Version="2.0.2" />
-    <PackageVersion Include="TaxoStore.Api" Version="2.0.2" />
-    <PackageVersion Include="TaxoStore.Api.Controllers" Version="2.0.2" />
-    <PackageVersion Include="TaxoStore.Core" Version="2.0.2" />
-    <PackageVersion Include="TaxoStore.PgSql" Version="2.0.2" />
+    <PackageVersion Include="Cadmus.Seed.TaxoStore.Parts" Version="3.0.0" />
+    <PackageVersion Include="Cadmus.TaxoStore.Parts" Version="3.0.0" />
+    <PackageVersion Include="TaxoStore.Api" Version="3.0.0" />
+    <PackageVersion Include="TaxoStore.Api.Controllers" Version="3.0.0" />
+    <PackageVersion Include="TaxoStore.Core" Version="3.0.0" />
+    <PackageVersion Include="TaxoStore.PgSql" Version="3.0.0" />
     <!-- External dependencies for all packages -->
-    <PackageVersion Include="Cadmus.Core" Version="16.0.14" />
-    <PackageVersion Include="Cadmus.Seed" Version="16.0.14" />
+    <PackageVersion Include="Cadmus.Core" Version="18.0.0" />
+    <PackageVersion Include="Cadmus.Seed" Version="18.0.0" />
     <PackageVersion Include="coverlet.collector" Version="10.1.0" />
     <PackageVersion Include="CsvHelper" Version="34.0.0" />
-    <PackageVersion Include="Fusi.Cli.Config" Version="1.0.3" />
-    <PackageVersion Include="Fusi.Cli.Logging" Version="1.0.3" />
-    <PackageVersion Include="Fusi.Microsoft.Extensions.Configuration.InMemoryJson" Version="5.0.0" />
-    <PackageVersion Include="Fusi.Text" Version="7.0.6" />
-    <PackageVersion Include="Fusi.Tools" Version="9.0.2" />
-    <PackageVersion Include="Fusi.Api.Auth.Controllers" Version="7.1.0" />
-    <PackageVersion Include="Fusi.Api.Auth.Models" Version="7.1.0" />
-    <PackageVersion Include="Fusi.DbManager.PgSql" Version="6.1.0" />
-    <PackageVersion Include="MessagingApi" Version="6.0.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.403" />
+    <PackageVersion Include="Fusi.Cli.Config" Version="2.0.0" />
+    <PackageVersion Include="Fusi.Cli.Logging" Version="2.0.0" />
+    <PackageVersion Include="Fusi.Microsoft.Extensions.Configuration.InMemoryJson" Version="6.0.0" />
+    <PackageVersion Include="Fusi.Text" Version="8.0.0" />
+    <PackageVersion Include="Fusi.Tools" Version="10.0.0" />
+    <PackageVersion Include="Fusi.Api.Auth.Controllers" Version="8.0.0" />
+    <PackageVersion Include="Fusi.Api.Auth.Models" Version="8.0.0" />
+    <PackageVersion Include="Fusi.DbManager.PgSql" Version="7.0.0" />
+    <PackageVersion Include="MessagingApi" Version="7.1.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="11.0.100" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
-    <PackageVersion Include="Polly" Version="8.9.0" />
-    <PackageVersion Include="Scalar.AspNetCore" Version="2.18.7" />
+    <PackageVersion Include="Polly" Version="8.9.1" />
+    <PackageVersion Include="Scalar.AspNetCore" Version="2.21.0" />
     <PackageVersion Include="Serilog" Version="4.4.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageVersion Include="Spectre.Console" Version="0.57.2" />
     <PackageVersion Include="Spectre.Console.Cli" Version="0.57.2" />
-    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="xunit.v3" Version="4.0.3" />
   </ItemGroup>
 </Project>
